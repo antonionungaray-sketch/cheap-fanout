@@ -1,0 +1,27 @@
+{
+  "name": "cheap-fanout-marketplace",
+  "description": "Marketplace de los skills de orquestación barata: fan-out de agentes baratos con revisión frontier, y consejo multi-frontier",
+  "owner": {
+    "name": "antonionungaray-sketch"
+  },
+  "plugins": [
+    {
+      "name": "cheap-fanout",
+      "description": "Orquestación barata para Claude Code: el frontier planea y revisa, el trabajo ancho lo absorben agentes baratos en paralelo (OpenCode Go, modelos free, Codex CLI, Kimi For Coding). Incluye el skill cheap-fanout (fan-out con dispatcher, timeouts por job y manejo automático de cuota) y cheap-fanout-ultimate (consejo multi-frontier a ciegas con tabla de divergencias).",
+      "version": "1.0.0",
+      "source": "./",
+      "author": {
+        "name": "antonionungaray-sketch"
+      },
+      "keywords": [
+        "orchestration",
+        "cost-optimization",
+        "parallel",
+        "opencode",
+        "research",
+        "fan-out"
+      ],
+      "category": "workflow"
+    }
+  ]
+}

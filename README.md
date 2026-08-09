@@ -16,6 +16,9 @@ barato no hace bien (**planear, rutear, revisar y sintetizar**) y el ancho cuest
 ## Qué hay aquí
 
 ```
+.claude-plugin/
+  marketplace.json    manifiesto del marketplace (lo que lee `plugin marketplace add`)
+  plugin.json         manifiesto del plugin; los skills se autodescubren desde skills/
 skills/
   cheap-fanout/
     SKILL.md            metodología: roles, ruteo por caso, cuota, reglas de oro
@@ -30,14 +33,34 @@ install.sh              enlaza los skills en ~/.claude/skills/
 
 ## Instalación
 
+### Opción A — como plugin de Claude Code (recomendada)
+
+El repo es un marketplace: los dos skills se instalan juntos y se actualizan con `claude plugin update`.
+
 ```bash
-git clone <este-repo> ~/Proyectos_local/cheap-fanout
+claude plugin marketplace add antonionungaray-sketch/cheap-fanout
+claude plugin install cheap-fanout@cheap-fanout-marketplace
+```
+
+> **Repo privado:** la máquina donde lo instales necesita credenciales de GitHub, o el clon falla
+> con un 404 que parece "no existe" y en realidad es "no tienes acceso". Se resuelve una vez con:
+> ```bash
+> gh auth login          # si gh no está autenticado en esa máquina
+> gh auth setup-git      # deja a git usar ese token para github.com
+> ```
+> Compruébalo antes de instalar con `git ls-remote https://github.com/antonionungaray-sketch/cheap-fanout`.
+
+### Opción B — clonar y enlazar a mano
+
+```bash
+git clone https://github.com/antonionungaray-sketch/cheap-fanout ~/Proyectos_local/cheap-fanout
 cd ~/Proyectos_local/cheap-fanout
-./install.sh --check     # diagnostica dependencias y credenciales
+./install.sh --check     # diagnostica dependencias y credenciales de los proveedores
 ./install.sh             # crea los symlinks en ~/.claude/skills/
 ```
 
-`install.sh` no pisa nada sin avisar: si ya existe algo en el destino, lo reporta y sigue.
+`install.sh` no pisa nada sin avisar: si ya existe algo en el destino, lo reporta y sigue. Útil si
+quieres editar los skills en su repo y verlos en vivo, sin pasar por el ciclo de plugin.
 
 ## Requisitos
 
