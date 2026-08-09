@@ -42,13 +42,7 @@ claude plugin marketplace add antonionungaray-sketch/cheap-fanout
 claude plugin install cheap-fanout@cheap-fanout-marketplace
 ```
 
-> **Repo privado:** la máquina donde lo instales necesita credenciales de GitHub, o el clon falla
-> con un 404 que parece "no existe" y en realidad es "no tienes acceso". Se resuelve una vez con:
-> ```bash
-> gh auth login          # si gh no está autenticado en esa máquina
-> gh auth setup-git      # deja a git usar ese token para github.com
-> ```
-> Compruébalo antes de instalar con `git ls-remote https://github.com/antonionungaray-sketch/cheap-fanout`.
+No hace falta autenticarse contra GitHub: el repo es público y el clon es anónimo.
 
 ### Opción B — clonar y enlazar a mano
 
