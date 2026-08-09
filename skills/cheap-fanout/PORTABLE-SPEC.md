@@ -443,7 +443,7 @@ búsqueda dedicado; para temas *long-tail* dale una URL de arranque en el prompt
 
 ---
 
-## 6. Catálogo de modelos OpenCode Go (sincronizado con catalog/models.yaml 2026-08-06; datos fetched_at 2026-08-04)
+## 6. Catálogo de modelos OpenCode Go (releído en opencode.ai/docs/go el 2026-08-09)
 
 Todos se invocan como `opencode-go/<id>`. Cuota en **requests por ventana de 5h** (más = más barato).
 
