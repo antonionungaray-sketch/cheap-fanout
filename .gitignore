@@ -1,0 +1,17 @@
+# Bitácora real del consejo: el campo "tema" describe sobre qué estabas decidiendo y puede
+# filtrar contexto de cliente o de proyecto. Se versiona solo la plantilla.
+skills/cheap-fanout-ultimate/council-log.md
+
+# Artefactos de corridas del helper (si alguien trabaja dentro del repo)
+*.out
+*.out.status
+*.out.gate
+*.out.rescued
+*.out.log
+jobs.tsv
+tmp/
+
+# Basura de sistema
+.DS_Store
+*.swp
+__pycache__/

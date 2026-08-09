@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# go-budget — cuánto llevas gastado del plan OpenCode Go en cada ventana.
+#
+# El plan Go limita por DÓLARES, no por requests, y con un presupuesto ÚNICO compartido entre
+# todos los modelos: $12/5h, $30/semana, $60/mes (opencode.ai/docs/go). Por eso cambiar de
+# deepseek-v4-flash a mimo-v2.5 NO consigue ni un dólar más — comen del mismo pozo.
+#
+# Uso:
+#   go-budget            # tabla legible
+#   go-budget --tsv      # ventana<TAB>gastado<TAB>límite<TAB>pct  (para scripts)
+#   go-budget --quiet    # sin salida; solo el exit code
+#
+# Exit code:  0 = holgado (<80% en las tres ventanas)
+#             1 = apretado (≥80% en alguna)
+#             2 = agotado (≥100% en alguna)
+#             3 = no se pudo medir (falta opencode o la base)
+#
+# LÍMITES DE ESTA MEDICIÓN (léelos antes de confiar en el número):
+#   - Sale de la base local de sesiones de opencode (`opencode db`), así que solo cuenta lo
+#     gastado DESDE ESTA MÁQUINA. Si usas el plan desde otro lado, subestima.
+#   - El `cost` lo calcula opencode con su propia tabla de precios; es su estimación, no la
+#     factura del proveedor.
+#   - Las ventanas semanal y mensual se calculan como los últimos 7/30 días corridos. La doc
+#     no dice si el proveedor usa ventana corrida o calendario — si estás cerca del límite,
+#     confirma en la consola: https://opencode.ai/auth
+set -uo pipefail
+# printf/awk deben usar punto decimal: con locale es_MX, "%.4f" rechaza "0.0443".
+export LC_NUMERIC=C
+
+MODE="table"
+case "${1:-}" in
+  --tsv)   MODE="tsv";;
+  --quiet) MODE="quiet";;
+  -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+  "") ;;
+  *) echo "go-budget: opción desconocida: $1" >&2; exit 3;;
+esac
+
+command -v opencode >/dev/null 2>&1 || { echo "go-budget: opencode no está en PATH" >&2; exit 3; }
+
+sql='
+SELECT "5h",  COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
+ WHERE json_extract(data,"$.providerID")="opencode-go"
+   AND json_extract(data,"$.time.created") >= (CAST(strftime("%s","now") AS INTEGER)-5*3600)*1000
+UNION ALL
+SELECT "7d",  COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
+ WHERE json_extract(data,"$.providerID")="opencode-go"
+   AND json_extract(data,"$.time.created") >= (CAST(strftime("%s","now") AS INTEGER)-7*86400)*1000
+UNION ALL
+SELECT "30d", COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
+ WHERE json_extract(data,"$.providerID")="opencode-go"
+   AND json_extract(data,"$.time.created") >= (CAST(strftime("%s","now") AS INTEGER)-30*86400)*1000
+'
+raw="$(opencode db "$sql" --format tsv 2>/dev/null | tail -n +2)"
+[ -n "$raw" ] || { [ "$MODE" = quiet ] || echo "go-budget: no pude leer la base de opencode" >&2; exit 3; }
+
+# límites del plan (opencode.ai/docs/go)
+lim_5h=12; lim_7d=30; lim_30d=60
+
+worst=0
+out=""
+while IFS=$'\t' read -r ventana gastado; do
+  [ -n "${ventana:-}" ] || continue
+  case "$ventana" in 5h) lim=$lim_5h;; 7d) lim=$lim_7d;; 30d) lim=$lim_30d;; *) continue;; esac
+  pct=$(awk -v g="${gastado:-0}" -v l="$lim" 'BEGIN{printf "%.0f", (l>0? g*100/l : 0)}')
+  [ "$pct" -ge 80 ]  && [ "$worst" -lt 1 ] && worst=1
+  [ "$pct" -ge 100 ] && worst=2
+  out="${out}${ventana}\t${gastado}\t${lim}\t${pct}\n"
+done <<< "$raw"
+
+case "$MODE" in
+  quiet) ;;
+  tsv)   printf "%b" "$out";;
+  table)
+    printf "%-6s %10s %8s %6s\n" ventana gastado límite uso
+    printf "%b" "$out" | while IFS=$'\t' read -r v g l p; do
+      [ -n "${v:-}" ] || continue
+      barra=""; n=$(( p / 10 )); [ "$n" -gt 10 ] && n=10
+      i=0; while [ "$i" -lt "$n" ]; do barra="${barra}█"; i=$((i+1)); done
+      printf "%-6s %10s %8s %5s%% %s\n" "$v" "\$$(printf '%.4f' "$g")" "\$$l" "$p" "$barra"
+    done
+    case "$worst" in
+      0) echo; echo "holgado — el ancho puede ir a opencode-go";;
+      1) echo; echo "APRETADO (≥80%) — manda el ancho a los modelos free (opencode/*-free) y reserva Go";;
+      2) echo; echo "AGOTADO — Go bloquea requests; usa opencode/*-free, codex o kimi-for-coding";;
+    esac
+    ;;
+esac
+exit "$worst"
