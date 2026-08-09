@@ -23,8 +23,9 @@ K3 (subteniente) pre-revisa el lote; los baratos absorben el ancho a centavos.
 revisar + síntesis final**. El ancho siempre barato. Si te sorprendes a punto de lanzar muchos
 subagentes *caros* para búsqueda/lote → para y usa este flujo.
 
-Esto es distinto de `/cheap-orq`: aquel *genera prompts* para que el usuario los corra a mano.
-Aquí **tú ejecutas** los agentes en el mismo loop y **tú integras** el resultado.
+Aquí **tú ejecutas** los agentes en el mismo loop y **tú integras** el resultado — no le entregas
+prompts al usuario para que él los corra a mano. (Si en esta máquina existe un skill `/cheap-orq`,
+ése es el que hace lo segundo; no los confundas.)
 
 ## Roles
 
@@ -38,9 +39,11 @@ Aquí **tú ejecutas** los agentes en el mismo loop y **tú integras** el result
 
 1. **Descomponer** en N unidades independientes. Ownership disjunto: dos jobs nunca tocan el mismo archivo.
 2. **Rutear** cada unidad al mejor modelo barato (tabla abajo — decide TÚ, no un router LLM).
-   Para dudar menos: `python3 ~/Proyectos_local/cheapAI-orq/lib/select_model.py`
-   y el catálogo en `~/Proyectos_local/cheapAI-orq/catalog/models.yaml` (fuente de
-   verdad de precios/cuotas; si esta tabla y el catálogo discrepan, **gana el catálogo**).
+   La tabla de este archivo es la referencia de ruteo, pero **caduca**: la fuente de verdad de
+   precios y cuotas es `opencode.ai/docs/go`. Si vas a rutear por precio en una decisión cara, o
+   si un número te parece raro, reléela ahí (y no la confundas con `opencode.ai/docs/zen`, que
+   cotiza los mismos modelos a precio de pago-por-uso). Lo que el proveedor sirve hoy te lo dice
+   `opencode models`.
 3. **Disparar en paralelo** con `bin/cheap-fanout` (prompts autocontenidos + jobs.tsv).
    Para ediciones que escriben, corre cada job en un git worktree aislado o usa `--dir`.
 4. **Recolectar** los `out_file` (revisa siempre `out_file.status`; 0 = OK).
@@ -135,8 +138,8 @@ Precios per 1M tokens (input/output). Cuota Go en requests por ventana de 5h.
 
 ### Catálogo completo del pool Go (cuota → precio → contexto)
 
-Cuotas y precios releídos en `opencode.ai/docs/go` el **2026-08-09**; contextos del catálogo del
-repo (`catalog/models.yaml`, verificados en fuente primaria).
+Cuotas y precios releídos en `opencode.ai/docs/go` el **2026-08-09**; los contextos vienen de la
+documentación de cada proveedor (esa página no los publica).
 
 | id | req/5h | $/1M in/out | ctx | Nota |
 |----|-------:|---|:--:|------|
