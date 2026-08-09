@@ -23,7 +23,7 @@ K3 (subteniente) pre-revisa el lote; los baratos absorben el ancho a centavos.
 revisar + síntesis final**. El ancho siempre barato. Si te sorprendes a punto de lanzar muchos
 subagentes *caros* para búsqueda/lote → para y usa este flujo.
 
-Esto es distinto de `/cheap-orq`: aquel *genera prompts* para que Antonio los corra a mano.
+Esto es distinto de `/cheap-orq`: aquel *genera prompts* para que el usuario los corra a mano.
 Aquí **tú ejecutas** los agentes en el mismo loop y **tú integras** el resultado.
 
 ## Roles
@@ -80,7 +80,7 @@ primero; el micro-triage es tuyo y cuesta ≤200 tokens: `scouts: [lista de jobs
   DESPUÉS, contra artefacto concreto (subteniente K3, codex challenge), nunca antes del plan.
 
 > ¿Decisión de alto impacto con incertidumbre real tuya? Eso no es fan-out: ver el skill
-> **cheap-fanout-ultimate** (consejo multi-frontier, solo a petición explícita de Antonio).
+> **cheap-fanout-ultimate** (consejo multi-frontier, solo a petición explícita del usuario).
 
 ## Uso del helper
 
@@ -229,7 +229,7 @@ lo lanza como `codex exec --skip-git-repo-check --ephemeral -s read-only -o out_
   de Claude Code). Lo que SÍ funciona para jobs codex que editan:
   `CHEAP_FANOUT_CODEX_SANDBOX=danger-full-access` **+ worktree git aislado con `--dir`**. Ahí el
   worktree ES la contención: codex corre sin ninguna barrera de filesystem, así que nunca lo
-  apuntes al repo real y revisa el diff antes de mergear. (Arreglo de fondo, decisión de Antonio:
+  apuntes al repo real y revisa el diff antes de mergear. (Arreglo de fondo, decisión del usuario:
   perfil AppArmor para bwrap o bajar ese sysctl — es un ajuste de seguridad de todo el sistema.)
 - **Luna por dos puertas — cómo alternar suscripciones:** la puerta se elige por job en el campo
   `model` del jobs.tsv: `gpt-5.6-luna` → `opencode run` → cuota **Go** (2,050 req/5h);

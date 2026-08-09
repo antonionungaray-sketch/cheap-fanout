@@ -1,12 +1,12 @@
 ---
 name: cheap-fanout-ultimate
-description: Use when Antonio escribe "/cheap-fanout-ultimate" (invocación preferida) o pide "convoca al consejo", "consejo de modelos", "segunda y tercera opinión" o comparar su solución/diagnóstico entre modelos frontier de labs distintos (GPT, Kimi, Claude); o cuando el orquestador enfrenta una decisión de alto impacto, difícil de revertir y con incertidumbre real propia y quiere sugerir convocarlo. NO para tareas verificables por test, preguntas factuales sueltas, ni trabajo ancho (eso es cheap-fanout).
+description: Use when el usuario escribe "/cheap-fanout-ultimate" (invocación preferida) o pide "convoca al consejo", "consejo de modelos", "segunda y tercera opinión" o comparar su solución/diagnóstico entre modelos frontier de labs distintos (GPT, Kimi, Claude); o cuando el orquestador enfrenta una decisión de alto impacto, difícil de revertir y con incertidumbre real propia y quiere sugerir convocarlo. NO para tareas verificables por test, preguntas factuales sueltas, ni trabajo ancho (eso es cheap-fanout).
 ---
 
 # cheap-fanout-ultimate — Consejo multi-frontier
 
 Fase final opcional encima de cheap-fanout: **dos frontier externos opinan A CIEGAS sobre el mismo
-problema y el orquestador arbitra con tabla de divergencias**. Automatiza lo que Antonio hacía a
+problema y el orquestador arbitra con tabla de divergencias**. Automatiza lo que el usuario hacía a
 mano (pegar el problema en varios chats y comparar). La divergencia entre labs ES la señal valiosa;
 el consenso puede ser prior compartido.
 
@@ -14,14 +14,14 @@ Funciona con o sin fan-out previo: también sobre un diagnóstico/solución suel
 
 ## Cuándo (y cuándo no)
 
-- **Solo por comando explícito de Antonio.** Puedes SUGERIR convocarlo cuando se junten las tres:
+- **Solo por comando explícito del usuario.** Puedes SUGERIR convocarlo cuando se junten las tres:
   decisión de alto impacto + difícil de revertir + incertidumbre real tuya. Nunca auto-convocar.
 - **NO convocar para:** tareas verificables por test (corre el test: es más barato y más fuerte que
   3 opiniones), trabajo ancho (cheap-fanout normal), datos factuales (verifica en primaria).
 - **Si existe una prueba discriminante barata (<30 min) que resolvería la duda, córrela ANTES de
   convocar;** convoca solo si el resultado sigue ambiguo. Media hora de instrumentación suele valer
   más que tres opiniones.
-- Máx **1 convocatoria por sesión** salvo orden explícita de Antonio.
+- Máx **1 convocatoria por sesión** salvo orden explícita del usuario.
 
 ## Asientos
 
@@ -113,7 +113,7 @@ máx 800 palabras, densidad sobre extensión.
 - Asiento externo cambió la decisión final en **<2 de 10** → el consejo es decoración: mátalo.
 - Sin desacuerdo sustantivo en **≥8 de 10** → asientos correlacionados o criterio de convocatoria
   flojo: mátalo o endurécelo.
-- Mediana wall-clock **>15 min** o peor que el flujo manual de Antonio → recorta a 1 asiento; si
+- Mediana wall-clock **>15 min** o peor que el flujo manual del usuario → recorta a 1 asiento; si
   reincide, mátalo.
 - **≥3 timeouts de K3 en 10** → K3 fuera del consejo (el rol subteniente se evalúa aparte).
 - Una convocatoria dejó sin ventana ChatGPT a jobs codex necesarios en **≥2 sesiones** → Sol fuera
