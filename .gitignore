@@ -16,3 +16,6 @@ jobs.tsv
 .DS_Store
 *.swp
 __pycache__/
+
+# Config local del editor
+*.code-workspace
