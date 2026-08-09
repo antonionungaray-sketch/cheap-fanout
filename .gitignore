@@ -9,7 +9,6 @@ skills/cheap-fanout-ultimate/council-log.md
 *.out.rescued
 *.out.log
 jobs.tsv
-tmp/
 
 # Basura de sistema
 .DS_Store
