@@ -75,10 +75,13 @@ for s in "$REPO"/skills/*/; do
   echo "  enlazado: $name → ${s%/}"
 done
 
-# la bitácora del consejo no se versiona; se siembra desde la plantilla en la primera instalación
-log="$REPO/skills/cheap-fanout-ultimate/council-log.md"
+# La bitácora del consejo no se versiona y vive FUERA del repo y de los directorios que administra
+# Claude Code: por la ruta de plugin el skill queda bajo plugins/cache/, que se reescribe en cada
+# `plugin update`. Con esta ruta ambas formas de instalar convergen en el mismo archivo.
+logdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/cheap-fanout"
+log="$logdir/council-log.md"
 tpl="$REPO/skills/cheap-fanout-ultimate/council-log.template.md"
-[ -f "$log" ] || { [ -f "$tpl" ] && cp "$tpl" "$log" && echo "  bitácora sembrada: council-log.md"; }
+[ -f "$log" ] || { [ -f "$tpl" ] && mkdir -p "$logdir" && cp "$tpl" "$log" && echo "  bitácora sembrada: $log"; }
 
 echo
 echo "Listo. Comprueba con:  $REPO/skills/cheap-fanout/bin/cheap-fanout --help"

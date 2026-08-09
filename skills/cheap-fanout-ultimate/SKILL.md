@@ -86,10 +86,17 @@ el default de `~/.codex/config.toml` (hoy `gpt-5.5`), que NO es Sol — siempre 
 
    Cierra con: veredicto final + **"qué me hizo cambiar respecto a mi postura previa"** (aunque la
    respuesta sea "nada", dilo y justifica contra los desacuerdos documentados).
-6. **Log — obligatorio.** Append de una línea a `council-log.md` (junto a este SKILL.md, en
-   `~/.claude/skills/cheap-fanout-ultimate/council-log.md`):
+6. **Log — obligatorio.** Append de una línea a **`~/.claude/cheap-fanout/council-log.md`**
+   (`mkdir -p` el directorio si falta; si el archivo no existe, créalo copiando el
+   `council-log.template.md` que viene junto a este SKILL.md):
    `fecha | tema | ¿desacuerdo sustantivo? | ¿cambió tu decisión? (qué claim) | latencia Sol | latencia K3 | timeouts`.
    Sin log no hay forma de evaluar los kill criteria.
+
+   Esa ruta **y no junto a este SKILL.md**: instalado como plugin, este archivo vive bajo
+   `~/.claude/plugins/cache/…`, que se reescribe entero en cada `plugin update` — una bitácora
+   ahí desaparece sin aviso, y escribir en `~/.claude/skills/…` cuando el skill llegó por plugin
+   solo crea una carpeta huérfana que nadie vuelve a leer. El log es el único dato que sostiene
+   los kill criteria: va fuera de cualquier directorio administrado.
 
 ## Plantilla de prompt de asiento
 

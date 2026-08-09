@@ -27,7 +27,7 @@ skills/
     bin/go-budget       medidor de consumo del plan OpenCode Go
   cheap-fanout-ultimate/
     SKILL.md                   el consejo: asientos, arbitraje, kill criteria
-    council-log.template.md    plantilla de la bitácora (la real no se versiona)
+    council-log.template.md    plantilla; la bitácora real vive en ~/.claude/cheap-fanout/
 install.sh              enlaza los skills en ~/.claude/skills/
 ```
 

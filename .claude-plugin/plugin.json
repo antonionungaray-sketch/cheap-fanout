@@ -1,7 +1,7 @@
 {
   "name": "cheap-fanout",
   "description": "Orquestación barata para Claude Code: el frontier planea y revisa, el trabajo ancho lo absorben agentes baratos en paralelo. Los skills se autodescubren desde ./skills/",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": {
     "name": "antonionungaray-sketch"
   },

@@ -1,5 +1,7 @@
 # Bitácora real del consejo: el campo "tema" describe sobre qué estabas decidiendo y puede
 # filtrar contexto de cliente o de proyecto. Se versiona solo la plantilla.
+# La bitácora vive en ~/.claude/cheap-fanout/council-log.md, fuera del repo; esta línea queda
+# como red por si una versión vieja del skill, o un agente distraído, escribe aquí.
 skills/cheap-fanout-ultimate/council-log.md
 
 # Artefactos de corridas del helper (si alguien trabaja dentro del repo)
