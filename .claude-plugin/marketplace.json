@@ -8,7 +8,7 @@
     {
       "name": "cheap-fanout",
       "description": "Orquestación barata para Claude Code: el frontier planea y revisa, el trabajo ancho lo absorben agentes baratos en paralelo (OpenCode Go, modelos free, Codex CLI, Kimi For Coding). Incluye el skill cheap-fanout (fan-out con dispatcher, timeouts por job y manejo automático de cuota) y cheap-fanout-ultimate (consejo multi-frontier a ciegas con tabla de divergencias).",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "source": "./",
       "author": {
         "name": "antonionungaray-sketch"
