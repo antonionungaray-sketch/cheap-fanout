@@ -53,9 +53,17 @@
 #   - --auto auto-aprueba permisos: úsalo solo con prompts de solo-lectura/investigación o en
 #     un worktree/dir aislado si el agente va a escribir.
 #   - Junto a cada out_file se escriben:
-#       out_file.status   exit code (0 OK · 124/137 timeout · 77 sin cuota · otro = fallo)
+#       out_file.status   exit code (0 OK · 124/137 timeout · 77 sin cuota ·
+#                         66 salida vacía · 64 prompt > límite argv · otro = fallo)
 #       out_file.gate     qué modelo/puerta lo sirvió realmente
 #       out_file.rescued  solo si hubo rescate por cuota: "<modelo original>\t<gemelo free>"
+#   - status=66 (salida vacía): opencode puede terminar con exit 0 y un .out que trae SOLO la
+#     cabecera `> build · <model>` (variante silenciosa del choque de SQLite bajo concurrencia,
+#     vista en Windows 2026-08-11). El helper marca fallo igual: el .status solo NO basta.
+#   - status=64 (prompt largo): el prompt viaja como ARGUMENTO de la línea de comandos. En
+#     Windows (Git Bash → CreateProcess) el límite es ~32 KB; en Linux es ARG_MAX (~2 MB)
+#     menos el entorno. Si el prompt_file excede el límite, el job NO se lanza: falla antes
+#     con 64 y un mensaje claro (en vez del críptico `Argument list too long`, exit 126).
 #   - En jobs codex, out_file trae SOLO el mensaje final; la traza completa va a out_file.log.
 #     La cuota de ChatGPT NO se autodetecta (no tengo la firma de su error verificada).
 #   - Sandbox de codex: read-only por default. Para jobs que escriben, exporta
@@ -69,6 +77,8 @@ TIMEOUT_DEF="15m"
 KILL_AFTER="15s"
 ON_QUOTA="free"
 QUOTA_STATUS=77
+EMPTY_STATUS=66
+ARGV_STATUS=64
 MODELS_CACHE="$(mktemp -u "${TMPDIR:-/tmp}/cheap-fanout-models.XXXXXX")"
 trap 'rm -f "$MODELS_CACHE"' EXIT
 CODEX_SANDBOX="${CHEAP_FANOUT_CODEX_SANDBOX:-read-only}"
@@ -78,7 +88,7 @@ while [ $# -gt 0 ]; do
     --parallel|-p)  PAR="$2";  shift 2;;
     --timeout|-t)   TIMEOUT_DEF="$2"; shift 2;;
     --on-quota)     ON_QUOTA="$2"; shift 2;;
-    -h|--help)      sed -n '2,62p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help)      sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     -*)             echo "cheap-fanout: opción desconocida: $1" >&2; exit 2;;
     *)              JOBS="$1"; shift;;
   esac
@@ -136,10 +146,31 @@ HAVE_TIMEOUT=1
 command -v timeout >/dev/null 2>&1 || { HAVE_TIMEOUT=0
   echo "cheap-fanout: aviso — timeout(1) no está en PATH; los jobs corren sin plazo" >&2; }
 
+# Tamaño máximo del prompt, que viaja como ARGUMENTO de la línea de comandos.
+# Windows (Git Bash → CreateProcess) topa en ~32 KB por línea — un prompt de 172 KB murió con
+# exit 126 "Argument list too long" (hallazgo 2026-08-11). En Linux manda ARG_MAX menos una
+# reserva para el entorno y los demás argumentos. Override: CHEAP_FANOUT_ARGV_MAX.
+case "${OSTYPE:-$(uname -s 2>/dev/null || echo unknown)}" in
+  msys*|cygwin*|MINGW*|MSYS*|CYGWIN*) ARGV_MAX_DEF=28000;;
+  *) ARGV_MAX_DEF=$(getconf ARG_MAX 2>/dev/null || echo 2097152)
+     case "$ARGV_MAX_DEF" in ''|*[!0-9]*) ARGV_MAX_DEF=2097152;; esac
+     ARGV_MAX_DEF=$((ARGV_MAX_DEF / 4));;
+esac
+ARGV_PROMPT_MAX="${CHEAP_FANOUT_ARGV_MAX:-$ARGV_MAX_DEF}"
+
 # Firma exacta que emite opencode al agotarse el presupuesto Go. Verificada en el log real:
 #   error.error="AI_APICallError: Error from provider (Console Go): Provider rate limit exceeded"
 is_quota_error() {
   grep -qiE 'provider rate limit exceeded|error from provider \(console go\)' "$1" 2>/dev/null
+}
+
+# Caracteres de CUERPO útil en un .out de opencode: sin códigos ANSI (\x1b[…m), sin la cabecera
+# `> build · <model>` y sin espacios/saltos. 0 ⇒ el job "salió bien" pero no dijo nada (variante
+# silenciosa del choque de SQLite bajo concurrencia: .status=0 con solo-cabecera, hallazgo
+# 2026-08-11). NO se pone umbral >0 a propósito: respuestas cortas legítimas ("PONG") existen.
+body_chars() {
+  sed -e 's/\x1b\[[0-9;]*m//g' -e '/^[[:space:]]*>[[:space:]]*build[[:space:]]/d' "$1" 2>/dev/null \
+    | tr -d '[:space:]' | wc -c | tr -d ' '
 }
 
 # Gemelo gratuito de un modelo Go, si el proveedor lo sirve (opencode/<id>-free).
@@ -159,6 +190,19 @@ free_twin() {
 run_one() {
   local model="$1" pf="$2" of="$3" tspec="$4"
   if [ ! -f "$pf" ]; then echo "PROMPT FILE NO EXISTE: $pf" > "$of"; return 1; fi
+
+  # El prompt viaja como argv. Si excede el límite de ESTE sistema, falla ANTES de lanzar
+  # (exit 126 "Argument list too long" no le dice nada al orquestador).
+  local psz
+  psz="$(wc -c < "$pf" | tr -d ' ')"
+  if [ "$psz" -gt "$ARGV_PROMPT_MAX" ]; then
+    printf '[cheap-fanout] PROMPT DEMASIADO LARGO: %s bytes; el límite de argumentos de este sistema es %s.\n' \
+      "$psz" "$ARGV_PROMPT_MAX" > "$of"
+    printf 'Rehaz el job con prompt POR REFERENCIA: un prompt corto que liste las rutas de los\n' >> "$of"
+    printf 'archivos a leer y deje que el agente los abra con sus herramientas de archivo desde\n' >> "$of"
+    printf 'el cwd (los agentes de opencode SÍ leen archivos locales). Override: CHEAP_FANOUT_ARGV_MAX.\n' >> "$of"
+    return "$ARGV_STATUS"
+  fi
 
   # prefijo de plazo: vacío ⇒ el job corre sin límite
   local tmo=()
@@ -225,6 +269,17 @@ run_one() {
     printf '\n[cheap-fanout] TIMEOUT: el job excedió %s y fue terminado (exit %s).\n' \
       "$tspec" "$rc" >> "$of"
   fi
+
+  # status=0 NO basta: bajo concurrencia opencode puede terminar con exit 0 y un .out que trae
+  # SOLO la cabecera `> build · <model>` + códigos ANSI (variante silenciosa del choque de
+  # SQLite, hallazgo 2026-08-11 — pasa el check de .status). Se marca fallo igual.
+  if [ "$rc" = 0 ] && [ "$(body_chars "$of")" = 0 ]; then
+    printf '\n[cheap-fanout] SALIDA VACÍA: exit 0 pero sin cuerpo tras quitar cabecera y ANSI\n' >> "$of"
+    printf '(variante silenciosa del choque de SQLite bajo concurrencia). Reintenta este job con\n' >> "$of"
+    printf 'MENOS concurrencia: en Windows el límite 2-3 es GLOBAL por máquina — dos lotes\n' >> "$of"
+    printf 'cheap-fanout simultáneos comparten el mismo SQLite de opencode.\n' >> "$of"
+    rc="$EMPTY_STATUS"
+  fi
   return "$rc"
 }
 
@@ -249,7 +304,7 @@ done < "$JOBS"
 wait
 
 # --- contar fallos releyendo los .status ---
-fail=0; total=0; timedout=0; sincuota=0; rescatados=0
+fail=0; total=0; timedout=0; sincuota=0; rescatados=0; vacios=0; largos=0
 while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
   model="${model%%$'\r'}"
   [ -z "${model:-}" ] && continue
@@ -267,6 +322,10 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
              echo "cheap-fanout: TIMEOUT (status=$s) → $of" >&2;;
     "$QUOTA_STATUS") fail=$((fail + 1)); sincuota=$((sincuota + 1))
              echo "cheap-fanout: SIN CUOTA (status=$s) → $of" >&2;;
+    "$EMPTY_STATUS") fail=$((fail + 1)); vacios=$((vacios + 1))
+             echo "cheap-fanout: SALIDA VACÍA (status=$s) → $of" >&2;;
+    "$ARGV_STATUS") fail=$((fail + 1)); largos=$((largos + 1))
+             echo "cheap-fanout: PROMPT DEMASIADO LARGO (status=$s) → $of" >&2;;
     *) fail=$((fail + 1)); echo "cheap-fanout: FALLÓ (status=$s) → $of" >&2;;
   esac
 done < "$JOBS"
@@ -274,12 +333,26 @@ done < "$JOBS"
 msg="cheap-fanout: $((total - fail))/${total} OK, ${fail} fallo(s)"
 [ "$timedout" -gt 0 ]   && msg="$msg (${timedout} por timeout)"
 [ "$rescatados" -gt 0 ] && msg="$msg (${rescatados} rescatado(s) por modelos free)"
+[ "$vacios" -gt 0 ]     && msg="$msg (${vacios} con salida vacía)"
+[ "$largos" -gt 0 ]     && msg="$msg (${largos} por prompt demasiado largo)"
 if [ "$sincuota" -gt 0 ]; then
   msg="$msg (${sincuota} sin cuota y sin gemelo free)"
   echo "$msg" >&2
   echo 'cheap-fanout: el plan Go limita por DÓLARES con un pozo único ($12/5h, $30/sem, $60/mes)' >&2
   echo "cheap-fanout: cambiar a otro modelo Go NO ayuda. Revisa 'go-budget' y manda esos jobs a" >&2
   echo "cheap-fanout: opencode/<modelo>-free, a 'codex' (ChatGPT) o a kimi-for-coding/k3." >&2
+  exit "$fail"
+fi
+if [ "$vacios" -gt 0 ]; then
+  echo "$msg" >&2
+  echo 'cheap-fanout: salidas vacías = choque de SQLite bajo concurrencia. Reintenta esos jobs' >&2
+  echo 'cheap-fanout: con menos --parallel y SIN otros lotes cheap-fanout corriendo a la vez.' >&2
+  exit "$fail"
+fi
+if [ "$largos" -gt 0 ]; then
+  echo "$msg" >&2
+  echo 'cheap-fanout: prompts que exceden el argv del sistema. Rehaz esos jobs por REFERENCIA:' >&2
+  echo 'cheap-fanout: prompt corto con las rutas de los archivos, y que el agente los lea del cwd.' >&2
   exit "$fail"
 fi
 echo "$msg" >&2

@@ -47,9 +47,16 @@ prompts al usuario para que él los corra a mano. (Si en esta máquina existe un
 3. **Disparar en paralelo** con `bin/cheap-fanout` (prompts autocontenidos + jobs.tsv).
    Para ediciones que escriben, corre cada job en un git worktree aislado o usa `--dir`.
 4. **Recolectar** los `out_file` (revisa siempre `out_file.status`; 0 = OK).
-5. **Pre-revisión K3** (lotes ≥3): un job `kimi-for-coding/k3` recibe los prompts originales +
-   todos los `.out` concatenados y devuelve veredicto por unidad + datos de alto impacto +
-   borrador de síntesis (plantilla abajo). Con 1-2 unidades, sáltatelo y revisa directo.
+5. **Pre-revisión K3** (lotes ≥3): un job `kimi-for-coding/k3` recibe —**por referencia**, no
+   concatenados— las rutas de los pares prompt→`.out` y los lee con sus propias herramientas de
+   archivo desde el cwd, y devuelve veredicto por unidad + datos de alto impacto + borrador de
+   síntesis (plantilla abajo). Con 1-2 unidades, sáltatelo y revisa directo.
+   **Por referencia, siempre:** concatenar prompts + `.out` en el prompt del job K3 crece sin
+   techo (172 KB medidos con un lote mediano) y el prompt viaja como argumento de la línea de
+   comandos — en Windows topa en ~32 KB y mata el job (`Argument list too long`, exit 126; el
+   helper ahora lo detecta antes y lo marca `.status=64`). Los agentes de opencode **SÍ leen
+   archivos locales del cwd** — la nota de abajo de "solo tienen `webfetch`" habla de búsqueda
+   web, no de archivos.
 6. **Spot-check + síntesis final (TÚ):** verifica todas las DUDOSO/FALLO, 1-2 OK al azar y todo
    dato de alto impacto contra fuente primaria. Un falso-OK en la muestra invalida el veredicto
    del lote → revisión completa tuya. La síntesis final la escribes TÚ sobre el borrador (los
@@ -107,6 +114,14 @@ B=~/.claude/skills/cheap-fanout/bin/cheap-fanout
   `opencode` chocan con `database is locked` (SQLite) y el job falla silencioso; por eso revisa
   siempre `.status` y reintenta los status≠0 con menos concurrencia. Los jobs codex no usan ese
   SQLite (corren `--ephemeral`): un lote mixto reparte mejor la concurrencia.
+  **El límite de Windows (2-3) es GLOBAL por máquina, no por lote:** todas las invocaciones de
+  cheap-fanout comparten el MISMO SQLite de opencode — dos lotes `--parallel 2` a la vez son 4
+  instancias y ya estás en zona de fallo (medido 2026-08-11). No lances dos lotes simultáneos en
+  Windows; y si ya hay un lote corriendo, cuenta sus jobs contra tu `--parallel`.
+  **Ojo con la variante silenciosa del choque:** también puede terminar con **`.status=0` y un
+  `.out` que trae SOLO la cabecera** `> build · <model>` (28 bytes) — pasa el check de status.
+  El helper ya la detecta y la marca `.status=66` ("SALIDA VACÍA"), y los `.out` traen códigos
+  ANSI (`\x1b[0m`) además de la cabecera: cualquier parser tuyo debe limpiarlos antes de medir.
 - **Timeout por job (4ª columna, opcional).** El helper garantiza que termina: cada job corre bajo
   `timeout`, con **15m** por default y `--timeout T` para cambiar el default del lote. La 4ª
   columna manda sobre el default y es donde vive el criterio real, porque tus clases de job no
@@ -118,6 +133,8 @@ B=~/.claude/skills/cheap-fanout/bin/cheap-fanout
   Plazos que uso: investigación barata `2m` · edición mecánica `5m` · asiento del consejo `8m`.
 - Los agentes de opencode solo tienen `webfetch` (no buscador): para temas long-tail dale una URL
   de arranque. Los jobs codex NO tienen web search: nada de investigación web por codex.
+  (Esto es sobre búsqueda **web**: los agentes de opencode SÍ leen archivos locales del cwd — es
+  la base del modo por-referencia de la pre-revisión K3.)
 
 ## Páginas que bloquean bots — cascada de 3 escalones (verificado 2026-08-09)
 
@@ -314,10 +331,20 @@ uso ≈5× el plan base; Moonshot no publica cifras exactas).
   TÚ el lote completo; si reincide en la sesión, cae de vuelta a dos niveles. El flujo NUNCA se
   bloquea por K3: veredicto imparseable o 429 → revisión completa tuya.
 - **Plantilla de pre-revisión** (el prompt del job K3; la línea de webfetch es clave — en el
-  dry-run K3 verificó fuentes por iniciativa propia):
+  dry-run K3 verificó fuentes por iniciativa propia). **Modo por referencia:** el prompt NO lleva
+  los contenidos, solo las RUTAS de los pares prompt→salida; K3 los abre con sus herramientas de
+  archivo desde el cwd (los agentes de opencode sí leen archivos locales). La versión con todo
+  concatenado es inutilizable en Windows con lotes medianos/grandes (límite ~32 KB de argv,
+  hallazgo 2026-08-11):
 
   ```
-  Eres pre-revisor de un lote. Abajo van N unidades: prompt original y salida del agente barato.
+  Eres pre-revisor de un lote. Abajo va la lista de N unidades como pares de RUTAS de archivo
+  (prompt original → salida del agente barato). Abre cada archivo con tus herramientas de
+  lectura desde el directorio actual; no asumas su contenido.
+  ===PARES===
+  U01: _fanout/prompt-U01.md → _fanout/U01.out
+  U02: _fanout/prompt-U02.md → _fanout/U02.out
+  ...
   Puedes usar webfetch para verificar fuentes. Responde EXACTAMENTE en este formato:
   ===VEREDICTOS===
   U01: OK|DUDOSO|FALLO — razón breve con el dato clave
@@ -365,8 +392,11 @@ uso ≈5× el plan base; Moonshot no publica cifras exactas).
 | Síntoma | Arreglo |
 |---|---|
 | Solo corre el primer lote de `--parallel` | Falta el `< /dev/null` del helper — usa bin/cheap-fanout tal cual |
-| `database is locked` (Windows) | Baja `--parallel` a 2-3; reintenta los status≠0 |
-| Salida con basura al inicio | Cabecera de opencode (`> build · <model>`); parsea el cuerpo/tail |
+| `database is locked` (Windows) | Baja `--parallel` a 2-3; reintenta los status≠0. El límite es GLOBAL por máquina: no corras dos lotes cheap-fanout a la vez |
+| `.status` = 66 / "SALIDA VACÍA" | Variante silenciosa del choque de SQLite: exit 0 pero el `.out` solo traía cabecera. Reintenta ese job con menos concurrencia y sin otros lotes corriendo |
+| `.status` = 64 / "PROMPT DEMASIADO LARGO" | El prompt excede el argv del sistema (~28 KB en Windows). El job NO se lanzó: reházlo por referencia (rutas de archivos en un prompt corto) o sube `CHEAP_FANOUT_ARGV_MAX` si sabes lo que haces |
+| exit 126 `Argument list too long` (corrido a mano) | El prompt viaja como argumento y Windows topa en ~32 KB. Pásalo por el helper (que lo detecta antes con status 64) o usa prompt por referencia |
+| Salida con basura al inicio | Cabecera de opencode (`> build · <model>`) **más códigos ANSI** (`\x1b[0m`): limpia ambos antes de parsear o medir si está vacía |
 | Job devolvió null/basura | Rehazlo o reasígnalo a un modelo mejor; no lo integres a ciegas |
 | `.status` = 124 o 137 | El job venció su plazo y el helper lo mató. Sube la 4ª columna de ESE job (o `none`) y relánzalo; si vence otra vez, el modelo se está atorando: reasigna |
 | `timeout inválido: 'X'` | La 4ª columna solo admite `90`, `30s`, `8m`, `1h` o `none` |

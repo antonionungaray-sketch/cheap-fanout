@@ -88,7 +88,17 @@ el default de `~/.codex/config.toml` (hoy `gpt-5.5`), que NO es Sol — siempre 
    respuesta sea "nada", dilo y justifica contra los desacuerdos documentados).
 6. **Log — obligatorio.** Append de una línea a **`~/.claude/cheap-fanout/council-log.md`**
    (`mkdir -p` el directorio si falta; si el archivo no existe, créalo copiando el
-   `council-log.template.md` que viene junto a este SKILL.md):
+   `council-log.template.md` que viene junto a este SKILL.md; **y si el template no está** —p.ej.
+   instalación parcial del plugin— créalo con este encabezado, no con un archivo pelado):
+
+   ```
+   # council-log — bitácora de convocatorias de cheap-fanout-ultimate
+   Una línea por convocatoria. Sin este log no hay forma de evaluar los kill criteria del SKILL.md.
+   Formato:
+   fecha | tema | ¿desacuerdo sustantivo? | ¿cambió tu decisión? (qué claim) | latencia Sol | latencia K3 | timeouts
+   ```
+
+   Línea a anexar:
    `fecha | tema | ¿desacuerdo sustantivo? | ¿cambió tu decisión? (qué claim) | latencia Sol | latencia K3 | timeouts`.
    Sin log no hay forma de evaluar los kill criteria.
 
