@@ -32,7 +32,7 @@ prompts al usuario para que él los corra a mano. (Si en esta máquina existe un
 | Nivel | Quién | Hace | Nunca hace |
 |---|---|---|---|
 | **Orquestador** | Claude/tú (frontier, Opus) | Descompone, rutea, **spot-check**, veredicto y síntesis **final** | El ancho; re-revisar lo ya limpio |
-| **Subteniente** | `kimi-for-coding/k3` (suscripción Allegretto) | Pre-revisa el lote entero en 1 request (1M ctx); 1-2 unidades difíciles; borrador de síntesis | El ancho; planear/rutear |
+| **Subteniente** | `kimi-for-coding/k3` (suscripción Allegretto) | Pre-revisa el lote entero en 1 request (1M ctx); 1-2 unidades **casi-frontier**; borrador de síntesis | El ancho; planear/rutear; la unidad difícil ordinaria (ésa va a `glm-5.3-flash`) |
 | **Ejecutores** | `mimo-v2.5`, `hy3`, `longcat-2.0`, `qwen3.8-flash`… (Go) y `codex` (Codex CLI) | El ancho: N unidades en paralelo | Decidir o preguntar nada |
 
 ## Flujo (6 pasos)
@@ -207,8 +207,39 @@ de rutear.
 | **Código agentic multi-paso (>5 tools)** | `deepseek-v4-flash` | `gpt-5.6-luna` · `kimi-k2.7-code` | Sigue siendo el mejor agentic barato, pero **ya no es el default**: subió a $0.22/$0.66 (el doble en horas peak), cayó a 7,600 req/5h, su tope es $30 y **perdió su gemelo free**. Úsalo cuando de verdad necesites el agentic, fuera de peak |
 | **Bug-fixing / SWE con repro claro** | `glm-5.2` | `hy3` | SWE bug-fix + artefactos UI, tope $60. Caro ($1.40/$4.40): 880 req/5h |
 | **Código con razonamiento algorítmico** | `deepseek-v4-pro` | `kimi-k2.7-code` | Coding de élite, pero se encareció fuerte: $0.66/$1.98 off-peak, 1,050 req/5h y tope **$15**. Ya no es "barato en $" — trátalo como semi-quirúrgico |
+| **Unidad difícil dentro del lote** (1-3 por lote) | `glm-5.3-flash` | `kimi-for-coding/k3` | Índice de Inteligencia 57 (= Opus 4.8, = K3) a $0.15/$0.50: calidad de escalón K3 a precio de escalón mimo. El tope $15 lo acota a esto. **Evidencia delgada — lee la nota debajo de la tabla** |
 | **Unidad casi-frontier quirúrgica** (1-2 por sesión) | `kimi-for-coding/k3` | `kimi-k3` (Go) · `qwen3.8-max` · `glm-5.3` | K3 por la suscripción directa Moonshot (Allegretto) NO gasta cuota Go; la vía Go (110 req/5h, tope $15 ⇒ ~490 req/mes) queda de fallback. Nunca en el ancho |
 | **Delicado / frontier** (arquitectura, seguridad, semántica, revisión y síntesis) | **orquestador (tú/Claude, Opus)** | — | NUNCA a un barato |
+
+### El escalón de la unidad difícil (nuevo, 2026-08-28)
+
+Entre el ancho y lo quirúrgico faltaba un peldaño. En un lote de ocho unidades casi siempre hay
+una o dos **más difíciles que el resto** —no de frontier, pero más de lo que `mimo-v2.5` hace
+bien— y sin ese peldaño solo había dos salidas, las dos malas: mandarla a un barato igual y
+confiar en que la pre-revisión la cache, o quemar uno de los dos asientos de K3 de la sesión en
+algo que no era tan grave.
+
+`glm-5.3-flash` cubre ese hueco: Índice de Inteligencia de Artificial Analysis **57** —el mismo
+que Kimi K3 y que Claude Opus 4.8, por encima de DeepSeek V4 Pro (53)— a **$0.15/$0.50**, o sea
+el precio del ancho, no el de K3 ($3/$15). Su tope de $15/mes parece la pega y es justo la parte
+buena: hace **físicamente imposible** usarlo como caballo del ancho, que es la disciplina que este
+escalón necesita.
+
+> **La evidencia es delgada y hay que tratarla como tal.** El modelo salió el **2026-08-26**, dos
+> días antes de entrar aquí: no tiene historial. Casi todos sus benchmarks los reporta Z.ai, su
+> propio lab; el Índice 57 es la excepción y por eso es el número en el que se apoya esta fila. Y
+> el uso propio medido es de **una sola unidad** (la investigación de modelos del 2026-08-28, que
+> la pre-revisión de K3 marcó OK). Uno de diez no prueba nada.
+>
+> **Cómo validarlo sin discutirlo:** la próxima vez que un lote traiga una unidad genuinamente
+> difícil, mándala a los dos —`glm-5.3-flash` y `kimi-for-coding/k3`— y compara las salidas.
+> Cuesta centavos y un asiento de K3 que ibas a gastar de todas formas. Con dos o tres
+> comparaciones sabes si el escalón se gana su lugar; si no, **borra la fila**.
+>
+> **Pendiente que abre:** si el escalón se confirma, la fila de bug-fixing (`glm-5.2`,
+> $1.40/$4.40, 880 req/5h) queda difícil de justificar — Z.ai afirma que 5.3-flash lo supera en
+> toda la línea a ~1/10 del precio. Pero eso lo dice el propio Z.ai: verifícalo antes de mover
+> esa fila.
 
 ### Catálogo completo del pool Go (cuota → tope → precio → contexto)
 
@@ -230,7 +261,7 @@ Cuotas, topes y precios releídos en `opencode.ai/docs/go` el **2026-08-28**; co
 | `mimo-v2.5-pro` | 3,250 | **$15** | $0.435/$0.87 | 1M | — | Multimodal reforzado |
 | `minimax-m3` | 3,200 | $60 | $0.30/$1.20 | 1M | — | Frontier-coding barato, agentic ctx largo |
 | `gpt-5.6-luna` | 2,050 | **$15** | $0.20/$1.20 | 1.05M | — | **Escalón >272K: $0.40/$1.80.** Retiene datos 30 días. Mismo modelo que puede correr Codex CLI |
-| `glm-5.3-flash` | 1,580 | **$15** | $0.15/$0.50 | 1M | — | Barato con 1M ctx, pero tope bajo |
+| `glm-5.3-flash` | 1,580 | **$15** | $0.15/$0.50 | 1M | — | "Ox Alpha", 320B/18B, MIT. Índice 57 (= Opus 4.8). **El escalón de la unidad difícil**; el tope bajo lo mantiene fuera del ancho |
 | `kimi-k2.7-code` | 1,350 | $60 | $0.95/$4.00 | 256K | — | Coding agentic multi-paso |
 | `kimi-k2.6` | 1,150 | $60 | $0.95/$4.00 | 256K | — | Gen previa de k2.7 |
 | `deepseek-v4-pro` | 1,050 | **$15** | $0.66/$1.98 · peak $1.32/$3.96 | 1M | — | Coding de élite. Ya NO es barato: 3x menos cuota y tope $15 |
@@ -413,7 +444,10 @@ uso ≈5× el plan base; Moonshot no publica cifras exactas).
   Smoke: `opencode run -m kimi-for-coding/k3 "Responde solo: PONG"` (medido 8s, 2026-08-09).
   Si devuelve `UnknownError` genérico → falta la credencial, no es congestión.
 - **Guardrails:** pre-revisión solo con lotes ≥3 · K3 NUNCA en el ancho · máx 1-2 unidades
-  difíciles por fan-out · puerta primaria `kimi-for-coding/k3` (no gasta cuota Go), fallback
+  difíciles por fan-out, y desde el 2026-08-28 **ese cupo se reserva para lo casi-frontier**: la
+  unidad difícil ordinaria va antes a `glm-5.3-flash` (ver *El escalón de la unidad difícil*), que
+  no gasta ni cuota Go relevante ni asiento de Allegretto · puerta primaria `kimi-for-coding/k3`
+  (no gasta cuota Go), fallback
   `opencode-go/kimi-k3` (110 req/5h y tope **$15/mes** ⇒ ~490 req al mes en total) solo si
   Allegretto falla.
 - **Guardrail de latencia (lección jul-2026):** si la pre-revisión tarda >5 min, mátala y revisa

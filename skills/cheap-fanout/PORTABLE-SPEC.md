@@ -581,6 +581,7 @@ La tabla va ordenada por utilidad práctica, no por cuota.
 | hy3 | 4,300 | $60 | 256K | ✅ | Código acotado con spec cerrada ($0.14/$0.58). Razonamiento/SWE altos |
 | qwen3.7-plus | 4,300 | $60 | 1M | — | Tool-calling+MCP. Escalón: >256K factura $1.20/$4.80 |
 | minimax-m3 | 3,200 | $60 | 1M | — | Código/agentic, contexto largo |
+| glm-5.3-flash | 1,580 | **$15** | 1M | — | **El escalón de la unidad difícil.** Índice de Inteligencia 57 (= Claude Opus 4.8, = Kimi K3) a $0.15/$0.50. El tope bajo lo mantiene fuera del ancho, que es lo que se quiere |
 | gpt-5.6-luna | 2,050 | **$15** | 1.05M | — | Agentic/multimodal fuerte, pero tope bajo y retiene datos 30 días |
 | kimi-k2.7-code | 1,350 | $60 | 256K | — | Código agentic multi-paso (>5 tools), specs rígidas |
 | deepseek-v4-pro | 1,050 | **$15** | 1M | — | Código con razonamiento algorítmico. Ya no es barato: $0.66/$1.98 y tope $15 |
@@ -628,6 +629,11 @@ responden y listaba dos que no). La prueba real es
   `qwen3.8-flash` para no tocar el tope de mimo). El volumen bruto NO va a
   `muse-spark-1.2-contributor`: está vetado.
 - Código acotado con spec cerrada → `hy3`, `qwen3.7-plus` o `kimi-k2.7-code`.
+- **La unidad difícil del lote** (1-3 por lote: más dura que el ancho, sin llegar a frontier) →
+  `glm-5.3-flash`. Existe para dejar de quemar asientos de K3 en cosas que no eran tan graves.
+  Evidencia todavía delgada: el modelo salió el 2026-08-26 y casi todos sus benchmarks los
+  reporta su propio lab. Valídalo mandando una unidad difícil a `glm-5.3-flash` y a K3 a la vez
+  y comparando; si no gana, borra el escalón.
 - Código agentic multi-paso → `deepseek-v4-flash`, fuera de horas peak.
 - Contexto muy largo (documentos/transcripciones gigantes) → `mimo-v2.5`, `longcat-2.0` o
   `minimax-m3` (1M ctx los tres, tope $60).
