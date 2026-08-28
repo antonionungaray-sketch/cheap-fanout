@@ -38,6 +38,23 @@ muestra juez-y-parte (ver kill criteria).
 **Nota de asiento Sol:** `codex:gpt-5.6-sol` fuerza el modelo con `-m`. Un job `codex` pelado usa
 el default de `~/.codex/config.toml` (hoy `gpt-5.5`), que NO es Sol — siempre escribe el sufijo.
 
+**Si Allegretto falla, el asiento sustituto tiene que ser de OTRO lab.** El fallback natural,
+`opencode-go/kimi-k3`, comparte pesos con el asiento caído: si lo usas, sigue siendo el mismo
+consejero, no uno nuevo (y desde agosto 2026 trae tope **$15/mes** ⇒ ~490 requests al mes, así que
+tampoco es un recurso holgado). Cuando K3 no esté disponible por ninguna puerta, la sustitución
+que preserva la independencia es un frontier de otro lab del pool Go: `opencode-go/qwen3.8-max`
+(Alibaba, 160 req/5h) o `opencode-go/glm-5.3` (Zhipu, 220 req/5h). **`grok-4.6` no es opción: está
+vetado** (ver *Modelos vetados* en el skill cheap-fanout), y el helper rechaza el lote entero si
+aparece. Anótalo en el log: un consejo con asiento sustituto no es comparable con uno normal.
+
+**Privacidad de los asientos — el paquete del consejo lleva el problema completo.** Ya está la
+regla de no mandar datos identificables del cliente; súmale la del lado del modelo (tabla de
+`opencode.ai/docs/go`, leída 2026-08-28). Dos modelos están **vetados de raíz** y el helper los
+rechaza en pre-vuelo: `muse-spark-1.2-contributor` (entrena con tus datos, no es ZDR) y `grok-4.6`
+— jamás como asiento ni para nada de este flujo. De los que quedan, `gpt-5.6-luna` retiene 30 días
+y el resto del pool 0 días. Si el paquete toca material sensible, el consejo va por Allegretto +
+codex, que son suscripciones tuyas, no por el pool Go.
+
 ## Flujo
 
 1. **Postura previa — obligatoria, ANTES de cualquier job.** Escribe tu diagnóstico/solución
@@ -153,6 +170,9 @@ máx 800 palabras, densidad sobre extensión.
 | `Unknown model: gpt-5.6-sol` | Bug de codex-cli 0.144-0.145; actualiza (`npm i -g @openai/codex@latest`). Verificado OK en 0.147.0 (smoke 2026-08-09) |
 | Asiento K3 >8 min | El helper ya lo mató (`.status`=124). Consejo degrada a Sol + tu postura. Anota el timeout en el log |
 | Asiento K3 falla al instante con `UnknownError` | No es timeout: falta la credencial `kimi-for-coding` en `~/.local/share/opencode/auth.json` (o `KIMI_API_KEY`). Ver el skill cheap-fanout |
+| K3 caído por las dos puertas (Allegretto y Go) | Sustituye por un frontier de OTRO lab (`opencode-go/qwen3.8-max`, `opencode-go/glm-5.3`); nunca por otro Kimi/DeepSeek, que no aporta independencia, ni por `grok-4.6`, que está vetado. Anota la sustitución en el log |
+| Asiento Go rebotado por cuota | Corre `go-budget`: si lo agotado es el tope mensual de ESE modelo ($15 para `kimi-k3`, `qwen3.8-max` y `glm-5.3`), otro modelo Go sí tiene presupuesto; si es el pozo global, el consejo degrada a Allegretto + codex + tu postura |
+| `cheap-fanout: MODELO VETADO` al lanzar los asientos | Un asiento apunta a `muse-spark-1.2-contributor` o `grok-4.6`. No uses el override: cámbialo por `qwen3.8-max` o `glm-5.3` |
 | `consejo-sol.out` vacío pero status=0 | Mira `consejo-sol.out.log`: el helper vuelca ahí la traza de codex |
 | Sol devuelve dato factual sin fuente | No lo adoptes sin verificar en primaria (Sol no tiene web) |
 | Los dos asientos coinciden en todo | Sospecha prior compartido; verifica el claim central en primaria antes de celebrarlo. Anota "sin desacuerdo" en el log |

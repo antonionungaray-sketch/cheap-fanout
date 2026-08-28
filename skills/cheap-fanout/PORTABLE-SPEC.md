@@ -120,9 +120,12 @@ OpenCode Go, usa la primera y el resto no estorba:
 #   sobrevivientes. Por eso NO hace falta envolverlo en `setsid`.
 #
 # Cuota Go agotada (se maneja sola; no hay que prohibir modelos a mano):
-#   El plan Go limita por DÓLARES con un pozo ÚNICO compartido entre todos sus modelos
-#   ($12/5h, $30/semana, $60/mes — opencode.ai/docs/go). Por eso reintentar en otro modelo Go
-#   NO consigue nada: el presupuesto ya se acabó para todos.
+#   El plan Go limita por DÓLARES y desde agosto 2026 tiene DOS límites: el pozo GLOBAL
+#   ($12/5h, $30/semana, $60/mes) y un TOPE MENSUAL POR MODELO ($60/$30/$15 según el modelo
+#   — opencode.ai/docs/go). Por eso reintentar en otro modelo Go a veces SÍ sirve (si lo
+#   agotado fue el tope de un modelo) y a veces no (si fue el pozo global). Distinguirlo es
+#   una decisión de calidad y de presupuesto: la toma el orquestador con `go-budget`, no
+#   este script.
 #   Al detectar la firma del error de cuota en la salida de un job, el helper reintenta ese job
 #   UNA vez en el gemelo gratuito del MISMO modelo (opencode/<id>-free) — la propia doc de Go
 #   dice: "If you reach the usage limit, you can continue using the free models".
@@ -141,10 +144,20 @@ OpenCode Go, usa la primera y el resto no estorba:
 #   - --auto auto-aprueba permisos: úsalo solo con prompts de solo-lectura/investigación o en
 #     un worktree/dir aislado si el agente va a escribir.
 #   - Junto a cada out_file se escriben:
-#       out_file.status   exit code (0 OK · 124/137 timeout · 77 sin cuota · otro = fallo)
+#       out_file.status   exit code (0 OK · 124/137 timeout · 77 sin cuota ·
+#                         66 salida vacía · 64 prompt > límite argv · otro = fallo)
 #       out_file.gate     qué modelo/puerta lo sirvió realmente
 #       out_file.rescued  solo si hubo rescate por cuota: "<modelo original>\t<gemelo free>"
+#   - status=66 (salida vacía): opencode puede terminar con exit 0 y un .out que trae SOLO la
+#     cabecera `> build · <model>` (variante silenciosa del choque de SQLite bajo concurrencia,
+#     vista en Windows 2026-08-11). El helper marca fallo igual: el .status solo NO basta.
+#   - status=64 (prompt largo): el prompt viaja como ARGUMENTO de la línea de comandos. En
+#     Windows (Git Bash → CreateProcess) el límite es ~32 KB; en Linux es ARG_MAX (~2 MB)
+#     menos el entorno. Si el prompt_file excede el límite, el job NO se lanza: falla antes
+#     con 64 y un mensaje claro (en vez del críptico `Argument list too long`, exit 126).
 #   - En jobs codex, out_file trae SOLO el mensaje final; la traza completa va a out_file.log.
+#   - Modelos VETADOS (muse-spark-1.2-contributor, grok-4.6, y sus gemelos -free): el lote se
+#     rechaza entero en pre-vuelo con exit 2. Override por invocación: CHEAP_FANOUT_ALLOW_VETOED=1.
 #     La cuota de ChatGPT NO se autodetecta (no tengo la firma de su error verificada).
 #   - Sandbox de codex: read-only por default. Para jobs que escriben, exporta
 #     CHEAP_FANOUT_CODEX_SANDBOX=workspace-write (usa worktree aislado + --dir).
@@ -157,6 +170,8 @@ TIMEOUT_DEF="15m"
 KILL_AFTER="15s"
 ON_QUOTA="free"
 QUOTA_STATUS=77
+EMPTY_STATUS=66
+ARGV_STATUS=64
 MODELS_CACHE="$(mktemp -u "${TMPDIR:-/tmp}/cheap-fanout-models.XXXXXX")"
 trap 'rm -f "$MODELS_CACHE"' EXIT
 CODEX_SANDBOX="${CHEAP_FANOUT_CODEX_SANDBOX:-read-only}"
@@ -166,7 +181,7 @@ while [ $# -gt 0 ]; do
     --parallel|-p)  PAR="$2";  shift 2;;
     --timeout|-t)   TIMEOUT_DEF="$2"; shift 2;;
     --on-quota)     ON_QUOTA="$2"; shift 2;;
-    -h|--help)      sed -n '2,62p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help)      sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     -*)             echo "cheap-fanout: opción desconocida: $1" >&2; exit 2;;
     *)              JOBS="$1"; shift;;
   esac
@@ -196,8 +211,34 @@ case "$ON_QUOTA" in
   *) echo "cheap-fanout: --on-quota debe ser 'free' u 'off'" >&2; exit 2;;
 esac
 
+# --- modelos vetados (decisión permanente del usuario, 2026-08-28) ---
+# No es una preferencia de estilo: son modelos cuyo uso tiene un costo que no se ve en la cuota.
+#   muse-spark-1.2-contributor : entrena con tus datos y no es ZDR. Su gemelo free, igual.
+#   grok-4.6                   : regresión en agentic coding vs 4.5 y TTFT de 31s.
+# El rechazo es en PRE-VUELO: si un jobs.tsv trae uno, no se lanza NADA (mejor que gastar cuota
+# en los demás y descubrirlo al final). Se puede saltar a propósito, por invocación:
+#   CHEAP_FANOUT_ALLOW_VETOED=1 cheap-fanout jobs.tsv
+VETOED="muse-spark-1.2-contributor grok-4.6"
+ALLOW_VETOED="${CHEAP_FANOUT_ALLOW_VETOED:-0}"
+
+# id desnudo de un modelo, sea cual sea la puerta: quita el prefijo de proveedor, el 'codex:' y
+# el sufijo '-free', para que ni opencode/<id>-free ni codex:<id> se cuelen por la puerta de atrás.
+bare_id() {
+  local m="$1"
+  m="${m#codex:}"
+  m="${m##*/}"
+  m="${m%-free}"
+  printf '%s' "$m"
+}
+
+is_vetoed() {
+  local id; id="$(bare_id "$1")"
+  case " $VETOED " in *" $id "*) return 0;; esac
+  return 1
+}
+
 # --- qué CLIs necesita este jobs.tsv (solo exige los que se usan) + valida los plazos ---
-need_opencode=0; need_codex=0; lineno=0
+need_opencode=0; need_codex=0; lineno=0; vetados_vistos=""
 while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
   lineno=$((lineno + 1))
   model="${model%%$'\r'}"
@@ -207,9 +248,21 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
     codex|codex:*) need_codex=1;;
     *)            need_opencode=1;;
   esac
+  if [ "$ALLOW_VETOED" != 1 ] && is_vetoed "$model"; then
+    vetados_vistos="${vetados_vistos}${vetados_vistos:+$'\n'}  línea ${lineno}: ${model}"
+  fi
   norm_timeout "${to:-}" >/dev/null || {
     echo "cheap-fanout: línea $lineno: timeout inválido: '${to}'" >&2; exit 2; }
 done < "$JOBS"
+if [ -n "$vetados_vistos" ]; then
+  echo "cheap-fanout: MODELO VETADO — no se lanzó ningún job del lote." >&2
+  printf '%s\n' "$vetados_vistos" >&2
+  echo "cheap-fanout: vetados: ${VETOED// /, } (y sus gemelos -free)." >&2
+  echo "cheap-fanout: el ancho va a mimo-v2.5 o longcat-2.0; lo quirúrgico, a kimi-for-coding/k3," >&2
+  echo "cheap-fanout: qwen3.8-max o glm-5.3. Ver 'Modelos vetados' en el SKILL.md." >&2
+  echo "cheap-fanout: para saltarlo a propósito: CHEAP_FANOUT_ALLOW_VETOED=1" >&2
+  exit 2
+fi
 if [ "$need_opencode" = 1 ]; then
   command -v opencode >/dev/null 2>&1 || { echo "cheap-fanout: opencode no está en PATH" >&2; exit 2; }
 fi
@@ -224,10 +277,31 @@ HAVE_TIMEOUT=1
 command -v timeout >/dev/null 2>&1 || { HAVE_TIMEOUT=0
   echo "cheap-fanout: aviso — timeout(1) no está en PATH; los jobs corren sin plazo" >&2; }
 
+# Tamaño máximo del prompt, que viaja como ARGUMENTO de la línea de comandos.
+# Windows (Git Bash → CreateProcess) topa en ~32 KB por línea — un prompt de 172 KB murió con
+# exit 126 "Argument list too long" (hallazgo 2026-08-11). En Linux manda ARG_MAX menos una
+# reserva para el entorno y los demás argumentos. Override: CHEAP_FANOUT_ARGV_MAX.
+case "${OSTYPE:-$(uname -s 2>/dev/null || echo unknown)}" in
+  msys*|cygwin*|MINGW*|MSYS*|CYGWIN*) ARGV_MAX_DEF=28000;;
+  *) ARGV_MAX_DEF=$(getconf ARG_MAX 2>/dev/null || echo 2097152)
+     case "$ARGV_MAX_DEF" in ''|*[!0-9]*) ARGV_MAX_DEF=2097152;; esac
+     ARGV_MAX_DEF=$((ARGV_MAX_DEF / 4));;
+esac
+ARGV_PROMPT_MAX="${CHEAP_FANOUT_ARGV_MAX:-$ARGV_MAX_DEF}"
+
 # Firma exacta que emite opencode al agotarse el presupuesto Go. Verificada en el log real:
 #   error.error="AI_APICallError: Error from provider (Console Go): Provider rate limit exceeded"
 is_quota_error() {
   grep -qiE 'provider rate limit exceeded|error from provider \(console go\)' "$1" 2>/dev/null
+}
+
+# Caracteres de CUERPO útil en un .out de opencode: sin códigos ANSI (\x1b[…m), sin la cabecera
+# `> build · <model>` y sin espacios/saltos. 0 ⇒ el job "salió bien" pero no dijo nada (variante
+# silenciosa del choque de SQLite bajo concurrencia: .status=0 con solo-cabecera, hallazgo
+# 2026-08-11). NO se pone umbral >0 a propósito: respuestas cortas legítimas ("PONG") existen.
+body_chars() {
+  sed -e 's/\x1b\[[0-9;]*m//g' -e '/^[[:space:]]*>[[:space:]]*build[[:space:]]/d' "$1" 2>/dev/null \
+    | tr -d '[:space:]' | wc -c | tr -d ' '
 }
 
 # Gemelo gratuito de un modelo Go, si el proveedor lo sirve (opencode/<id>-free).
@@ -247,6 +321,19 @@ free_twin() {
 run_one() {
   local model="$1" pf="$2" of="$3" tspec="$4"
   if [ ! -f "$pf" ]; then echo "PROMPT FILE NO EXISTE: $pf" > "$of"; return 1; fi
+
+  # El prompt viaja como argv. Si excede el límite de ESTE sistema, falla ANTES de lanzar
+  # (exit 126 "Argument list too long" no le dice nada al orquestador).
+  local psz
+  psz="$(wc -c < "$pf" | tr -d ' ')"
+  if [ "$psz" -gt "$ARGV_PROMPT_MAX" ]; then
+    printf '[cheap-fanout] PROMPT DEMASIADO LARGO: %s bytes; el límite de argumentos de este sistema es %s.\n' \
+      "$psz" "$ARGV_PROMPT_MAX" > "$of"
+    printf 'Rehaz el job con prompt POR REFERENCIA: un prompt corto que liste las rutas de los\n' >> "$of"
+    printf 'archivos a leer y deje que el agente los abra con sus herramientas de archivo desde\n' >> "$of"
+    printf 'el cwd (los agentes de opencode SÍ leen archivos locales). Override: CHEAP_FANOUT_ARGV_MAX.\n' >> "$of"
+    return "$ARGV_STATUS"
+  fi
 
   # prefijo de plazo: vacío ⇒ el job corre sin límite
   local tmo=()
@@ -281,9 +368,9 @@ run_one() {
         > "$of" 2>&1 < /dev/null || rc=$?
       echo "$mpath" > "${of}.gate"
 
-      # --- cuota Go agotada: el plan limita por DÓLARES con un pozo ÚNICO compartido, así que
-      # reintentar en otro modelo Go no sirve de nada. El único fallback que sigue siendo el
-      # MISMO modelo es su gemelo free (opencode/<id>-free), que la propia doc de Go señala:
+      # --- cuota Go agotada: puede ser el pozo global o el tope mensual de ESTE modelo, y
+      # desde aquí no se distingue. El único fallback seguro —el que no cambia la calidad
+      # porque es el MISMO modelo— es su gemelo free (opencode/<id>-free), que la doc señala:
       # "If you reach the usage limit, you can continue using the free models."
       if is_quota_error "$of"; then
         local twin=""
@@ -313,6 +400,17 @@ run_one() {
     printf '\n[cheap-fanout] TIMEOUT: el job excedió %s y fue terminado (exit %s).\n' \
       "$tspec" "$rc" >> "$of"
   fi
+
+  # status=0 NO basta: bajo concurrencia opencode puede terminar con exit 0 y un .out que trae
+  # SOLO la cabecera `> build · <model>` + códigos ANSI (variante silenciosa del choque de
+  # SQLite, hallazgo 2026-08-11 — pasa el check de .status). Se marca fallo igual.
+  if [ "$rc" = 0 ] && [ "$(body_chars "$of")" = 0 ]; then
+    printf '\n[cheap-fanout] SALIDA VACÍA: exit 0 pero sin cuerpo tras quitar cabecera y ANSI\n' >> "$of"
+    printf '(variante silenciosa del choque de SQLite bajo concurrencia). Reintenta este job con\n' >> "$of"
+    printf 'MENOS concurrencia: en Windows el límite 2-3 es GLOBAL por máquina — dos lotes\n' >> "$of"
+    printf 'cheap-fanout simultáneos comparten el mismo SQLite de opencode.\n' >> "$of"
+    rc="$EMPTY_STATUS"
+  fi
   return "$rc"
 }
 
@@ -337,7 +435,7 @@ done < "$JOBS"
 wait
 
 # --- contar fallos releyendo los .status ---
-fail=0; total=0; timedout=0; sincuota=0; rescatados=0
+fail=0; total=0; timedout=0; sincuota=0; rescatados=0; vacios=0; largos=0
 while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
   model="${model%%$'\r'}"
   [ -z "${model:-}" ] && continue
@@ -355,6 +453,10 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
              echo "cheap-fanout: TIMEOUT (status=$s) → $of" >&2;;
     "$QUOTA_STATUS") fail=$((fail + 1)); sincuota=$((sincuota + 1))
              echo "cheap-fanout: SIN CUOTA (status=$s) → $of" >&2;;
+    "$EMPTY_STATUS") fail=$((fail + 1)); vacios=$((vacios + 1))
+             echo "cheap-fanout: SALIDA VACÍA (status=$s) → $of" >&2;;
+    "$ARGV_STATUS") fail=$((fail + 1)); largos=$((largos + 1))
+             echo "cheap-fanout: PROMPT DEMASIADO LARGO (status=$s) → $of" >&2;;
     *) fail=$((fail + 1)); echo "cheap-fanout: FALLÓ (status=$s) → $of" >&2;;
   esac
 done < "$JOBS"
@@ -362,12 +464,28 @@ done < "$JOBS"
 msg="cheap-fanout: $((total - fail))/${total} OK, ${fail} fallo(s)"
 [ "$timedout" -gt 0 ]   && msg="$msg (${timedout} por timeout)"
 [ "$rescatados" -gt 0 ] && msg="$msg (${rescatados} rescatado(s) por modelos free)"
+[ "$vacios" -gt 0 ]     && msg="$msg (${vacios} con salida vacía)"
+[ "$largos" -gt 0 ]     && msg="$msg (${largos} por prompt demasiado largo)"
 if [ "$sincuota" -gt 0 ]; then
   msg="$msg (${sincuota} sin cuota y sin gemelo free)"
   echo "$msg" >&2
-  echo 'cheap-fanout: el plan Go limita por DÓLARES con un pozo único ($12/5h, $30/sem, $60/mes)' >&2
-  echo "cheap-fanout: cambiar a otro modelo Go NO ayuda. Revisa 'go-budget' y manda esos jobs a" >&2
-  echo "cheap-fanout: opencode/<modelo>-free, a 'codex' (ChatGPT) o a kimi-for-coding/k3." >&2
+  echo 'cheap-fanout: Go limita por DÓLARES en dos niveles: pozo global ($12/5h, $30/sem,' >&2
+  echo 'cheap-fanout: $60/mes) y tope mensual por modelo ($60/$30/$15). Corre go-budget:' >&2
+  echo "cheap-fanout:   - si lo agotado es el TOPE del modelo -> manda ese job a otro modelo Go" >&2
+  echo "cheap-fanout:   - si lo agotado es el POZO global -> opencode/<modelo>-free, 'codex'" >&2
+  echo "cheap-fanout:     o kimi-for-coding/k3; cambiar de modelo Go no ayuda." >&2
+  exit "$fail"
+fi
+if [ "$vacios" -gt 0 ]; then
+  echo "$msg" >&2
+  echo 'cheap-fanout: salidas vacías = choque de SQLite bajo concurrencia. Reintenta esos jobs' >&2
+  echo 'cheap-fanout: con menos --parallel y SIN otros lotes cheap-fanout corriendo a la vez.' >&2
+  exit "$fail"
+fi
+if [ "$largos" -gt 0 ]; then
+  echo "$msg" >&2
+  echo 'cheap-fanout: prompts que exceden el argv del sistema. Rehaz esos jobs por REFERENCIA:' >&2
+  echo 'cheap-fanout: prompt corto con las rutas de los archivos, y que el agente los lea del cwd.' >&2
   exit "$fail"
 fi
 echo "$msg" >&2
@@ -381,9 +499,10 @@ cheap-fanout --help          # confirma que corre
 
 ### 3.4.bis El medidor `go-budget` (opcional pero recomendado)
 
-El plan Go limita por **dólares** con un pozo único ($12/5h · $30/semana · $60/mes), no por
-requests, y no hay API pública de consumo. `go-budget` lo estima leyendo la base local de
-sesiones (`opencode db`), que guarda `cost` y `providerID` por mensaje:
+El plan Go limita por **dólares** en dos niveles —un pozo global ($12/5h · $30/semana · $60/mes)
+y un **tope mensual por modelo** ($60/$30/$15 según el modelo)—, no por requests, y no hay API
+pública de consumo. `go-budget` lo estima leyendo la base local de sesiones (`opencode db`), que
+guarda `cost`, `providerID` y `modelID` por mensaje:
 
 ```bash
 opencode db "SELECT ROUND(SUM(json_extract(data,'\$.cost')),4) FROM message
@@ -391,7 +510,10 @@ opencode db "SELECT ROUND(SUM(json_extract(data,'\$.cost')),4) FROM message
    AND json_extract(data,'\$.time.created') >= (CAST(strftime('%s','now') AS INTEGER)-5*3600)*1000"
 ```
 
-Copia el script completo de `bin/go-budget` del skill. Mide solo lo gastado desde esa máquina.
+Copia el script completo de `bin/go-budget` del skill: imprime las tres ventanas globales **y** el
+gasto del mes de cada modelo contra su propio tope, que es lo que decide si ante un fallo de cuota
+conviene cambiar de modelo Go (tope agotado) o salirse de Go (pozo global agotado). Mide solo lo
+gastado desde esa máquina.
 
 ### 3.5 (Opcional) Instalarlo como skill de Claude Code
 Si la otra máquina tiene **Claude Code** y quieres que el orquestador lo invoque solo:
@@ -432,8 +554,8 @@ sigue los pasos a mano.
 mkdir -p /tmp/cf && cd /tmp/cf
 printf 'Busca la fecha de lanzamiento de Python 3.14 y da la URL fuente. Responde en 2 lineas.' > p01.txt
 printf 'Busca cuantos habitantes tiene Monterrey (dato mas reciente) y la URL fuente. 2 lineas.' > p02.txt
-printf 'deepseek-v4-flash\t/tmp/cf/p01.txt\t/tmp/cf/o01.out\n'  > jobs.tsv
-printf 'deepseek-v4-flash\t/tmp/cf/p02.txt\t/tmp/cf/o02.out\n' >> jobs.tsv
+printf 'mimo-v2.5\t/tmp/cf/p01.txt\t/tmp/cf/o01.out\n'  > jobs.tsv
+printf 'mimo-v2.5\t/tmp/cf/p02.txt\t/tmp/cf/o02.out\n' >> jobs.tsv
 cheap-fanout --parallel 2 jobs.tsv
 cat o01.out o02.out         # ← tú lees, verificas y sintetizas
 ```
@@ -443,33 +565,72 @@ búsqueda dedicado; para temas *long-tail* dale una URL de arranque en el prompt
 
 ---
 
-## 6. Catálogo de modelos OpenCode Go (releído en opencode.ai/docs/go el 2026-08-09)
+## 6. Catálogo de modelos OpenCode Go (releído en opencode.ai/docs/go el 2026-08-28)
 
-Todos se invocan como `opencode-go/<id>`. Cuota en **requests por ventana de 5h** (más = más barato).
+Todos se invocan como `opencode-go/<id>`. Cuota en **requests por ventana de 5h**; `tope` = los
+dólares del mes que ese modelo puede consumir del plan (además del pozo global compartido).
+La tabla va ordenada por utilidad práctica, no por cuota.
 
-| id | req/5h | contexto | Úsalo para |
-|----|-------:|:--------:|------------|
-| **deepseek-v4-flash** | **31,650** | 1M | **DEFAULT.** Investigación, fetch+resumen, mecánico simple, tests desde spec. Smoke-test 2026-08-06: responde OK. |
-| mimo-v2.5 | 30,100 | 1M | Alternativa de cuota altísima (mecánico, resumen a gran escala) |
-| hy3 | 4,300 | 262k | **NUEVO.** Misma cuota que qwen3.7-plus a ~3x menos costo ($0.14/$0.58) y sin escalones de precio. Candidato a reemplazarlo en mecánico/simple — `confidence: low`, sin uso propio medido todavía |
-| qwen3.7-plus | 4,300 | — | Código acotado con spec cerrada |
-| deepseek-v4-pro | 3,450 | 1M | Código con razonamiento algorítmico |
-| minimax-m3 | 3,200 | 1M | Código/agentic, contexto largo |
-| gpt-5.6-luna | 2,050 | 1.05M | **NUEVO.** Contexto enorme a precio bajo ($0.20/$1.20); útil para ingerir documentos/transcripciones gigantes. `confidence: low`, sin uso propio medido |
-| kimi-k2.7-code | 1,350 | 262k | Código agentic multi-paso (>5 tools), specs rígidas |
-| glm-5.2 | 880 | 1M | Bug-fixing / SWE con repro claro |
+| id | req/5h | tope | contexto | free | Úsalo para |
+|----|-------:|:----:|:--------:|:--:|------------|
+| **mimo-v2.5** | **30,100** | $60 | 1M | ✅ | **DEFAULT.** Investigación, fetch+resumen, mecánico simple, resumen a gran escala. Multimodal nativo, $0.14/$0.28 |
+| ~~muse-spark-1.2-contributor~~ | 45,300 | $60 | 1M | ✅ | 🚫 **VETADO** — entrena con tus datos y no es ZDR. Tiene la cuota más alta del pool; da igual. Ver *Modelos vetados* |
+| longcat-2.0 | 11,400 | $60 | 1M | — | Segundo del ancho con 0 días de retención ($0.30/$1.20; cache a $0.006/1M) |
+| deepseek-v4-flash | 7,600 | $30 | 1M | — | Agentic multi-paso. Ex-default: subió a $0.22/$0.66 (2x en peak), cayó a 7,600 req/5h y perdió su gemelo free |
+| qwen3.8-flash | 5,400 | $30 | 1M | — | Barato ($0.15/$0.47) con 1M ctx |
+| hy3 | 4,300 | $60 | 256K | ✅ | Código acotado con spec cerrada ($0.14/$0.58). Razonamiento/SWE altos |
+| qwen3.7-plus | 4,300 | $60 | 1M | — | Tool-calling+MCP. Escalón: >256K factura $1.20/$4.80 |
+| minimax-m3 | 3,200 | $60 | 1M | — | Código/agentic, contexto largo |
+| gpt-5.6-luna | 2,050 | **$15** | 1.05M | — | Agentic/multimodal fuerte, pero tope bajo y retiene datos 30 días |
+| kimi-k2.7-code | 1,350 | $60 | 256K | — | Código agentic multi-paso (>5 tools), specs rígidas |
+| deepseek-v4-pro | 1,050 | **$15** | 1M | — | Código con razonamiento algorítmico. Ya no es barato: $0.66/$1.98 y tope $15 |
+| glm-5.2 | 880 | $60 | 1M | — | Bug-fixing / SWE con repro claro |
 
-**NO uses para fan-out** (aparecieron en el catálogo 2026-08-04 pero su cuota los hace inviables
-para trabajo ancho): `grok-4.5` (120 req/5h), `kimi-k3` (110 req/5h), `qwen3.8-max` (160 req/5h).
-Son modelos frontier de cuota casi nula — resérvalos para una consulta puntual tuya, nunca para
-un jobs.tsv con muchas líneas.
+**NO uses para fan-out** (cuota casi nula: resérvalos para una consulta puntual tuya, nunca para
+un jobs.tsv con muchas líneas): `qwen3.7-max` (340 req/5h), `glm-5.3` (220), `qwen3.8-max` (160),
+`kimi-k3` (110). Todos con tope $15/mes salvo `qwen3.7-max`.
+
+**Modelos vetados (decisión permanente del usuario, 2026-08-28).** Dos modelos del pool NO se usan
+aunque los números inviten, y el helper lo aplica solo: rechaza el lote **entero en pre-vuelo**
+(exit 2) si un jobs.tsv trae alguno, en cualquiera de sus formas (`<id>`, `opencode-go/<id>`,
+`opencode/<id>-free`, `codex:<id>`).
+- `muse-spark-1.2-contributor` **y su gemelo free** — trato explícito "cuota gigante a cambio de
+  tus datos": mismos pesos que `muse-spark-1.2` ($1.25/$4.25) a 12x menos en input porque el lab
+  usa lo que le mandes para entrenar. No es ZDR.
+- `grok-4.6` — su agentic coding regresó frente a `grok-4.5` (LiveBench 54.2 vs 56.5) y su
+  time-to-first-token pasó de 8.7s a 31.2s. Además retiene datos 30 días.
+
+Sus casos se cubren con `mimo-v2.5` / `longcat-2.0` (el ancho) y `kimi-for-coding/k3`,
+`qwen3.8-max` o `glm-5.3` (lo quirúrgico). Override deliberado, por invocación:
+`CHEAP_FANOUT_ALLOW_VETOED=1`.
+
+**Dos límites, no uno (cambió en agosto 2026).** Además del pozo global, cada modelo tiene un tope
+mensual en dólares ($60, $30 o $15 — la doc lo explica en *"Why some models have lower usage"*).
+Consecuencia: agotar un modelo ya **no** agota el plan, así que cambiar de modelo Go sí consigue
+presupuesto; lo que no consigue nada es cambiar de modelo cuando lo agotado fue el pozo global.
+`go-budget` distingue los dos casos.
+
+**Peak/off-peak de DeepSeek.** Los tres modelos DeepSeek cuestan el doble en horas peak
+(01:00-04:00 y 06:00-10:00 UTC, L-V; en CDMX, dom-jue 19:00-22:00 y lun-vie 00:00-04:00). Ningún
+otro modelo del pool tiene esta mecánica.
+
+**Gemelos free vivos** (probados 2026-08-28): `opencode/mimo-v2.5-free` y `opencode/hy3-free`.
+El de `deepseek-v4-flash` **murió**; el de `muse-spark-1.2-contributor` responde pero está
+**vetado** (el gemelo free entrena igual que el de paga). Otros `*-free`
+que aparecen en `models.dev` no responden: pruébalos antes de meterlos en un jobs.tsv.
+
+**`opencode models` no es autoridad**: viene desfasado (el 2026-08-28 omitía cuatro modelos que sí
+responden y listaba dos que no). La prueba real es
+`opencode run -m opencode-go/<id> "Responde exactamente: PONG"`.
 
 **Ruteo por dificultad (no uses un router LLM, decide tú):**
-- Investigación / fetch+resumen / mecánico simple → **`deepseek-v4-flash`** (o `mimo-v2.5` si
-  quieres reservar la cuota de flash; `hy3` como alternativa más barata sin verificar aún).
-- Código acotado con spec cerrada → `deepseek-v4-pro`, `qwen3.7-plus` o `kimi-k2.7-code`.
-- Contexto muy largo (documentos/transcripciones gigantes) → `gpt-5.6-luna` (1.05M ctx) o
-  `deepseek-v4-flash`/`mimo-v2.5` (1M ctx, más cuota).
+- Investigación / fetch+resumen / mecánico simple → **`mimo-v2.5`** (o `longcat-2.0` /
+  `qwen3.8-flash` para no tocar el tope de mimo). El volumen bruto NO va a
+  `muse-spark-1.2-contributor`: está vetado.
+- Código acotado con spec cerrada → `hy3`, `qwen3.7-plus` o `kimi-k2.7-code`.
+- Código agentic multi-paso → `deepseek-v4-flash`, fuera de horas peak.
+- Contexto muy largo (documentos/transcripciones gigantes) → `mimo-v2.5`, `longcat-2.0` o
+  `minimax-m3` (1M ctx los tres, tope $60).
 - Delicado / frontier (arquitectura, seguridad, semántica) → **el orquestador (tú/Claude)**, no
   un barato.
 

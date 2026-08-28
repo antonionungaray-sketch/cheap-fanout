@@ -32,9 +32,12 @@
 #   sobrevivientes. Por eso NO hace falta envolverlo en `setsid`.
 #
 # Cuota Go agotada (se maneja sola; no hay que prohibir modelos a mano):
-#   El plan Go limita por DÓLARES con un pozo ÚNICO compartido entre todos sus modelos
-#   ($12/5h, $30/semana, $60/mes — opencode.ai/docs/go). Por eso reintentar en otro modelo Go
-#   NO consigue nada: el presupuesto ya se acabó para todos.
+#   El plan Go limita por DÓLARES y desde agosto 2026 tiene DOS límites: el pozo GLOBAL
+#   ($12/5h, $30/semana, $60/mes) y un TOPE MENSUAL POR MODELO ($60/$30/$15 según el modelo
+#   — opencode.ai/docs/go). Por eso reintentar en otro modelo Go a veces SÍ sirve (si lo
+#   agotado fue el tope de un modelo) y a veces no (si fue el pozo global). Distinguirlo es
+#   una decisión de calidad y de presupuesto: la toma el orquestador con `go-budget`, no
+#   este script.
 #   Al detectar la firma del error de cuota en la salida de un job, el helper reintenta ese job
 #   UNA vez en el gemelo gratuito del MISMO modelo (opencode/<id>-free) — la propia doc de Go
 #   dice: "If you reach the usage limit, you can continue using the free models".
@@ -65,6 +68,8 @@
 #     menos el entorno. Si el prompt_file excede el límite, el job NO se lanza: falla antes
 #     con 64 y un mensaje claro (en vez del críptico `Argument list too long`, exit 126).
 #   - En jobs codex, out_file trae SOLO el mensaje final; la traza completa va a out_file.log.
+#   - Modelos VETADOS (muse-spark-1.2-contributor, grok-4.6, y sus gemelos -free): el lote se
+#     rechaza entero en pre-vuelo con exit 2. Override por invocación: CHEAP_FANOUT_ALLOW_VETOED=1.
 #     La cuota de ChatGPT NO se autodetecta (no tengo la firma de su error verificada).
 #   - Sandbox de codex: read-only por default. Para jobs que escriben, exporta
 #     CHEAP_FANOUT_CODEX_SANDBOX=workspace-write (usa worktree aislado + --dir).
@@ -118,8 +123,34 @@ case "$ON_QUOTA" in
   *) echo "cheap-fanout: --on-quota debe ser 'free' u 'off'" >&2; exit 2;;
 esac
 
+# --- modelos vetados (decisión permanente del usuario, 2026-08-28) ---
+# No es una preferencia de estilo: son modelos cuyo uso tiene un costo que no se ve en la cuota.
+#   muse-spark-1.2-contributor : entrena con tus datos y no es ZDR. Su gemelo free, igual.
+#   grok-4.6                   : regresión en agentic coding vs 4.5 y TTFT de 31s.
+# El rechazo es en PRE-VUELO: si un jobs.tsv trae uno, no se lanza NADA (mejor que gastar cuota
+# en los demás y descubrirlo al final). Se puede saltar a propósito, por invocación:
+#   CHEAP_FANOUT_ALLOW_VETOED=1 cheap-fanout jobs.tsv
+VETOED="muse-spark-1.2-contributor grok-4.6"
+ALLOW_VETOED="${CHEAP_FANOUT_ALLOW_VETOED:-0}"
+
+# id desnudo de un modelo, sea cual sea la puerta: quita el prefijo de proveedor, el 'codex:' y
+# el sufijo '-free', para que ni opencode/<id>-free ni codex:<id> se cuelen por la puerta de atrás.
+bare_id() {
+  local m="$1"
+  m="${m#codex:}"
+  m="${m##*/}"
+  m="${m%-free}"
+  printf '%s' "$m"
+}
+
+is_vetoed() {
+  local id; id="$(bare_id "$1")"
+  case " $VETOED " in *" $id "*) return 0;; esac
+  return 1
+}
+
 # --- qué CLIs necesita este jobs.tsv (solo exige los que se usan) + valida los plazos ---
-need_opencode=0; need_codex=0; lineno=0
+need_opencode=0; need_codex=0; lineno=0; vetados_vistos=""
 while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
   lineno=$((lineno + 1))
   model="${model%%$'\r'}"
@@ -129,9 +160,21 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
     codex|codex:*) need_codex=1;;
     *)            need_opencode=1;;
   esac
+  if [ "$ALLOW_VETOED" != 1 ] && is_vetoed "$model"; then
+    vetados_vistos="${vetados_vistos}${vetados_vistos:+$'\n'}  línea ${lineno}: ${model}"
+  fi
   norm_timeout "${to:-}" >/dev/null || {
     echo "cheap-fanout: línea $lineno: timeout inválido: '${to}'" >&2; exit 2; }
 done < "$JOBS"
+if [ -n "$vetados_vistos" ]; then
+  echo "cheap-fanout: MODELO VETADO — no se lanzó ningún job del lote." >&2
+  printf '%s\n' "$vetados_vistos" >&2
+  echo "cheap-fanout: vetados: ${VETOED// /, } (y sus gemelos -free)." >&2
+  echo "cheap-fanout: el ancho va a mimo-v2.5 o longcat-2.0; lo quirúrgico, a kimi-for-coding/k3," >&2
+  echo "cheap-fanout: qwen3.8-max o glm-5.3. Ver 'Modelos vetados' en el SKILL.md." >&2
+  echo "cheap-fanout: para saltarlo a propósito: CHEAP_FANOUT_ALLOW_VETOED=1" >&2
+  exit 2
+fi
 if [ "$need_opencode" = 1 ]; then
   command -v opencode >/dev/null 2>&1 || { echo "cheap-fanout: opencode no está en PATH" >&2; exit 2; }
 fi
@@ -237,9 +280,9 @@ run_one() {
         > "$of" 2>&1 < /dev/null || rc=$?
       echo "$mpath" > "${of}.gate"
 
-      # --- cuota Go agotada: el plan limita por DÓLARES con un pozo ÚNICO compartido, así que
-      # reintentar en otro modelo Go no sirve de nada. El único fallback que sigue siendo el
-      # MISMO modelo es su gemelo free (opencode/<id>-free), que la propia doc de Go señala:
+      # --- cuota Go agotada: puede ser el pozo global o el tope mensual de ESTE modelo, y
+      # desde aquí no se distingue. El único fallback seguro —el que no cambia la calidad
+      # porque es el MISMO modelo— es su gemelo free (opencode/<id>-free), que la doc señala:
       # "If you reach the usage limit, you can continue using the free models."
       if is_quota_error "$of"; then
         local twin=""
@@ -338,9 +381,11 @@ msg="cheap-fanout: $((total - fail))/${total} OK, ${fail} fallo(s)"
 if [ "$sincuota" -gt 0 ]; then
   msg="$msg (${sincuota} sin cuota y sin gemelo free)"
   echo "$msg" >&2
-  echo 'cheap-fanout: el plan Go limita por DÓLARES con un pozo único ($12/5h, $30/sem, $60/mes)' >&2
-  echo "cheap-fanout: cambiar a otro modelo Go NO ayuda. Revisa 'go-budget' y manda esos jobs a" >&2
-  echo "cheap-fanout: opencode/<modelo>-free, a 'codex' (ChatGPT) o a kimi-for-coding/k3." >&2
+  echo 'cheap-fanout: Go limita por DÓLARES en dos niveles: pozo global ($12/5h, $30/sem,' >&2
+  echo 'cheap-fanout: $60/mes) y tope mensual por modelo ($60/$30/$15). Corre go-budget:' >&2
+  echo "cheap-fanout:   - si lo agotado es el TOPE del modelo -> manda ese job a otro modelo Go" >&2
+  echo "cheap-fanout:   - si lo agotado es el POZO global -> opencode/<modelo>-free, 'codex'" >&2
+  echo "cheap-fanout:     o kimi-for-coding/k3; cambiar de modelo Go no ayuda." >&2
   exit "$fail"
 fi
 if [ "$vacios" -gt 0 ]; then

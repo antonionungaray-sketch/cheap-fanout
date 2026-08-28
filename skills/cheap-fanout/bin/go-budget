@@ -1,42 +1,93 @@
 #!/usr/bin/env bash
-# go-budget — cuánto llevas gastado del plan OpenCode Go en cada ventana.
+# go-budget — cuánto llevas gastado del plan OpenCode Go, en las ventanas globales y por modelo.
 #
-# El plan Go limita por DÓLARES, no por requests, y con un presupuesto ÚNICO compartido entre
-# todos los modelos: $12/5h, $30/semana, $60/mes (opencode.ai/docs/go). Por eso cambiar de
-# deepseek-v4-flash a mimo-v2.5 NO consigue ni un dólar más — comen del mismo pozo.
+# El plan Go limita por DÓLARES y desde agosto 2026 tiene DOS límites simultáneos:
+#   1) el pozo GLOBAL compartido por todos los modelos: $12/5h, $30/semana, $60/mes
+#   2) un TOPE MENSUAL POR MODELO: $60, $30 o $15 según el modelo (opencode.ai/docs/go,
+#      sección "Why some models have lower usage": pagas $10 y apuntan a darte 6x; donde no
+#      consiguieron descuento el multiplicador baja a 3x o 1.5x)
+# Por eso agotar un modelo ya NO agota el plan: si deepseek-v4-flash topó sus $30, mimo-v2.5
+# todavía tiene su propio carril de $60 mientras el pozo global aguante. Cambiar de modelo SÍ
+# consigue presupuesto — salvo cuando lo agotado es el pozo global.
 #
 # Uso:
-#   go-budget            # tabla legible
-#   go-budget --tsv      # ventana<TAB>gastado<TAB>límite<TAB>pct  (para scripts)
-#   go-budget --quiet    # sin salida; solo el exit code
+#   go-budget                 # ventanas globales + gasto del mes por modelo contra su tope
+#   go-budget --model <id>    # además, el exit code responde por ESE modelo
+#   go-budget --tsv           # ventana<TAB>gastado<TAB>límite<TAB>pct   (para scripts)
+#                             # las filas por modelo salen como  model:<id><TAB>…
+#   go-budget --quiet         # sin salida; solo el exit code
 #
-# Exit code:  0 = holgado (<80% en las tres ventanas)
-#             1 = apretado (≥80% en alguna)
-#             2 = agotado (≥100% en alguna)
+# Exit code:  0 = holgado (<80% en las tres ventanas globales y en todos los topes usados)
+#             1 = apretado (≥80% en una ventana global, o algún modelo pasado de su tope)
+#             2 = agotado (≥100% en una ventana global; o en el tope del --model pedido)
 #             3 = no se pudo medir (falta opencode o la base)
 #
 # LÍMITES DE ESTA MEDICIÓN (léelos antes de confiar en el número):
 #   - Sale de la base local de sesiones de opencode (`opencode db`), así que solo cuenta lo
 #     gastado DESDE ESTA MÁQUINA. Si usas el plan desde otro lado, subestima.
 #   - El `cost` lo calcula opencode con su propia tabla de precios; es su estimación, no la
-#     factura del proveedor.
+#     factura del proveedor. En DeepSeek hay precio peak/off-peak: si el lote corrió en peak,
+#     la estimación puede quedarse corta.
 #   - Las ventanas semanal y mensual se calculan como los últimos 7/30 días corridos. La doc
 #     no dice si el proveedor usa ventana corrida o calendario — si estás cerca del límite,
 #     confirma en la consola: https://opencode.ai/auth
+#   - Los topes por modelo son los de la doc leída el 2026-08-28. Un modelo que no esté en esa
+#     lista sale con tope "?" y no afecta el exit code.
 set -uo pipefail
 # printf/awk deben usar punto decimal: con locale es_MX, "%.4f" rechaza "0.0443".
 export LC_NUMERIC=C
 
 MODE="table"
-case "${1:-}" in
-  --tsv)   MODE="tsv";;
-  --quiet) MODE="quiet";;
-  -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
-  "") ;;
-  *) echo "go-budget: opción desconocida: $1" >&2; exit 3;;
-esac
+WANT_MODEL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tsv)   MODE="tsv"; shift;;
+    --quiet) MODE="quiet"; shift;;
+    --model) WANT_MODEL="${2:-}"; shift 2 || true
+             [ -n "$WANT_MODEL" ] || { echo "go-budget: --model necesita un id" >&2; exit 3; };;
+    -h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    *) echo "go-budget: opción desconocida: $1" >&2; exit 3;;
+  esac
+done
 
 command -v opencode >/dev/null 2>&1 || { echo "go-budget: opencode no está en PATH" >&2; exit 3; }
+
+# Modelos vetados (ver SKILL.md). Aquí NO se ocultan: si aparecen con gasto es que algo se los
+# saltó, y eso es justo lo que quieres ver.
+VETADOS="muse-spark-1.2-contributor grok-4.6"
+
+# Topes mensuales por modelo — opencode.ai/docs/go, columna "Usage" (leída 2026-08-28).
+# La tabla se queda COMPLETA a propósito, vetados incluidos: es la contabilidad del plan, no una
+# recomendación de ruteo.
+TOPES='
+muse-spark-1.2-contributor 60
+mimo-v2.5 60
+longcat-2.0 60
+hy3 60
+qwen3.7-plus 60
+qwen3.7-max 60
+qwen3.6-plus 60
+minimax-m3 60
+minimax-m2.7 60
+minimax-m2.5 60
+kimi-k2.7-code 60
+kimi-k2.6 60
+glm-5.2 60
+glm-5.1 60
+deepseek-v4-flash 30
+qwen3.8-flash 30
+hy4-preview 30
+grok-4.6 15
+grok-4.5 15
+gpt-5.6-luna 15
+glm-5.3 15
+glm-5.3-flash 15
+kimi-k3 15
+mimo-v2.5-pro 15
+qwen3.8-max 15
+deepseek-v4-pro 15
+deepseek-v4-flash-vision-exp 15
+'
 
 sql='
 SELECT "5h",  COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
@@ -54,7 +105,16 @@ SELECT "30d", COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
 raw="$(opencode db "$sql" --format tsv 2>/dev/null | tail -n +2)"
 [ -n "$raw" ] || { [ "$MODE" = quiet ] || echo "go-budget: no pude leer la base de opencode" >&2; exit 3; }
 
-# límites del plan (opencode.ai/docs/go)
+# Gasto del mes por modelo (misma ventana corrida de 30 días que la fila "30d").
+sql_m='
+SELECT json_extract(data,"$.modelID"), COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
+ WHERE json_extract(data,"$.providerID")="opencode-go"
+   AND json_extract(data,"$.time.created") >= (CAST(strftime("%s","now") AS INTEGER)-30*86400)*1000
+ GROUP BY 1 ORDER BY 2 DESC
+'
+raw_m="$(opencode db "$sql_m" --format tsv 2>/dev/null | tail -n +2)"
+
+# límites globales del plan (opencode.ai/docs/go)
 lim_5h=12; lim_7d=30; lim_30d=60
 
 worst=0
@@ -68,21 +128,79 @@ while IFS=$'\t' read -r ventana gastado; do
   out="${out}${ventana}\t${gastado}\t${lim}\t${pct}\n"
 done <<< "$raw"
 
+# Filas por modelo. Un modelo sin tope conocido sale con "?" y NO mueve el exit code.
+out_m=""
+modelo_topado=""
+vetado_con_gasto=""
+pct_want=""
+if [ -n "${raw_m:-}" ]; then
+  while IFS=$'\t' read -r mid gastado; do
+    [ -n "${mid:-}" ] || continue
+    tope="$(printf '%s\n' "$TOPES" | awk -v m="$mid" '$1==m{print $2; exit}')"
+    if [ -z "$tope" ]; then
+      out_m="${out_m}model:${mid}\t${gastado}\t?\t?\n"
+      continue
+    fi
+    pct=$(awk -v g="${gastado:-0}" -v l="$tope" 'BEGIN{printf "%.0f", (l>0? g*100/l : 0)}')
+    out_m="${out_m}model:${mid}\t${gastado}\t${tope}\t${pct}\n"
+    case " $VETADOS " in
+      *" $mid "*) awk -v g="${gastado:-0}" 'BEGIN{exit !(g>0)}' && \
+                  vetado_con_gasto="${vetado_con_gasto}${vetado_con_gasto:+, }${mid}";;
+    esac
+    [ "$mid" = "$WANT_MODEL" ] && pct_want="$pct"
+    if [ "$pct" -ge 100 ]; then
+      modelo_topado="${modelo_topado}${modelo_topado:+, }${mid}"
+      [ "$worst" -lt 1 ] && worst=1
+    fi
+  done <<< "$raw_m"
+fi
+
+# --model: el exit code responde por ESE modelo (agotado = 2, aunque el global esté holgado).
+if [ -n "$WANT_MODEL" ] && [ -n "$pct_want" ]; then
+  [ "$pct_want" -ge 80 ]  && [ "$worst" -lt 1 ] && worst=1
+  [ "$pct_want" -ge 100 ] && worst=2
+fi
+
 case "$MODE" in
   quiet) ;;
-  tsv)   printf "%b" "$out";;
+  tsv)   printf "%b" "$out"; printf "%b" "$out_m";;
   table)
-    printf "%-6s %10s %8s %6s\n" ventana gastado límite uso
+    printf "%-32s %10s %8s %6s\n" ventana gastado límite uso
     printf "%b" "$out" | while IFS=$'\t' read -r v g l p; do
       [ -n "${v:-}" ] || continue
       barra=""; n=$(( p / 10 )); [ "$n" -gt 10 ] && n=10
       i=0; while [ "$i" -lt "$n" ]; do barra="${barra}█"; i=$((i+1)); done
-      printf "%-6s %10s %8s %5s%% %s\n" "$v" "\$$(printf '%.4f' "$g")" "\$$l" "$p" "$barra"
+      printf "%-32s %10s %8s %5s%% %s\n" "$v" "\$$(printf '%.4f' "$g")" "\$$l" "$p" "$barra"
     done
+    if [ -n "$out_m" ]; then
+      echo
+      printf "%-32s %10s %8s %6s\n" "modelo (30d)" gastado tope uso
+      printf "%b" "$out_m" | while IFS=$'\t' read -r v g l p; do
+        [ -n "${v:-}" ] || continue
+        if [ "$p" = "?" ]; then
+          printf "%-32s %10s %8s %6s\n" "${v#model:}" "\$$(printf '%.4f' "$g")" "?" "?"
+          continue
+        fi
+        barra=""; n=$(( p / 10 )); [ "$n" -gt 10 ] && n=10
+        i=0; while [ "$i" -lt "$n" ]; do barra="${barra}█"; i=$((i+1)); done
+        printf "%-32s %10s %8s %5s%% %s\n" "${v#model:}" "\$$(printf '%.4f' "$g")" "\$$l" "$p" "$barra"
+      done
+    fi
+    echo
+    if [ -n "$vetado_con_gasto" ]; then
+      echo "OJO — modelo VETADO con gasto en los últimos 30 días: ${vetado_con_gasto}."
+      echo "  Algo se saltó el veto del helper (¿CHEAP_FANOUT_ALLOW_VETOED, u otra herramienta?)."
+    fi
+    if [ -n "$modelo_topado" ]; then
+      echo "TOPE POR MODELO agotado: ${modelo_topado} — el pozo global puede seguir holgado."
+      echo "  Ese job va a OTRO modelo Go con tope disponible (decisión de calidad: tuya)."
+    fi
     case "$worst" in
-      0) echo; echo "holgado — el ancho puede ir a opencode-go";;
-      1) echo; echo "APRETADO (≥80%) — manda el ancho a los modelos free (opencode/*-free) y reserva Go";;
-      2) echo; echo "AGOTADO — Go bloquea requests; usa opencode/*-free, codex o kimi-for-coding";;
+      0) echo "holgado — el ancho puede ir a opencode-go";;
+      1) echo "APRETADO — revisa arriba si lo apretado es una ventana global (manda el ancho a";
+         echo "  opencode/*-free) o solo el tope de un modelo (cambia ESE job de modelo)";;
+      2) echo "AGOTADO — cambiar de modelo Go NO consigue presupuesto: usa opencode/*-free,";
+         echo "  codex o kimi-for-coding/k3";;
     esac
     ;;
 esac

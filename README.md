@@ -77,7 +77,7 @@ Un `jobs.tsv` separado por TABs, un job por línea:
 ```
 
 ```
-deepseek-v4-flash	p01.md	o01.out	2m
+mimo-v2.5	p01.md	o01.out	2m
 kimi-for-coding/k3	p02.md	o02.out	8m
 codex:gpt-5.6-luna	p03.md	o03.out	4m
 ```
@@ -90,7 +90,7 @@ El campo del modelo elige la **puerta**, y cada puerta es un presupuesto indepen
 
 | Forma | Corre por | Presupuesto |
 |---|---|---|
-| `deepseek-v4-flash` | `opencode run -m opencode-go/<id>` | plan Go |
+| `mimo-v2.5` | `opencode run -m opencode-go/<id>` | plan Go |
 | `opencode/<id>-free` | `opencode run` | gratis |
 | `<provider>/<id>` | `opencode run -m <ruta>` tal cual | el de ese proveedor |
 | `codex` / `codex:<m>` | `codex exec` | suscripción ChatGPT |
@@ -104,21 +104,30 @@ Cada job deja `salida.out`, más `.status` (exit code), `.gate` (qué modelo lo 
 Al vencer manda SIGTERM y, 15s después, SIGKILL; el `.status` queda en 124 y el resumen lo reporta.
 Sin esto, un agente colgado bloquea el `wait` final para siempre.
 
-**La cuota se maneja sola.** El plan Go limita por **dólares con un pozo único compartido**
-($12/5h · $30/semana · $60/mes), así que cambiar de un modelo Go a otro no consigue nada: el
-presupuesto ya se acabó para todos. Al detectar el error de cuota, el dispatcher reintenta el job
-**en el gemelo gratuito del mismo modelo** (`opencode/<id>-free`) — mismo modelo, otro presupuesto,
-misma calidad. Si ese modelo no tiene gemelo free, no lo sustituye por otro: deja `.status=77` y te
-lo dice, porque cambiar de modelo es una decisión de calidad y es del orquestador.
+**La cuota se maneja sola.** El plan Go limita por **dólares en dos niveles**: un pozo global
+($12/5h · $30/semana · $60/mes) y, desde agosto 2026, un **tope mensual por modelo** ($60, $30 o
+$15 según el modelo). Al detectar el error de cuota, el dispatcher reintenta el job **en el gemelo
+gratuito del mismo modelo** (`opencode/<id>-free`) — mismo modelo, otro presupuesto, misma calidad.
+Si ese modelo no tiene gemelo free, no lo sustituye por otro: deja `.status=77` y te lo dice,
+porque cambiar de modelo es una decisión de calidad y es del orquestador.
 
-`bin/go-budget` te dice antes de lanzar cuánto llevas gastado, leyendo la base local de opencode:
+`bin/go-budget` te dice antes de lanzar cuánto llevas gastado —las ventanas globales y el gasto
+del mes de cada modelo contra su propio tope—, leyendo la base local de opencode:
 
 ```
-ventana    gastado  límite    uso
-5h        $0.0480      $12     0%
-7d       $14.4903      $30    48% ████
-30d      $29.8653      $60    50% █████
+ventana                       gastado  límite    uso
+5h                            $0.0483      $12     0%
+7d                            $1.0442      $30     3%
+30d                          $17.6254      $60    29% ██
+
+modelo (30d)                  gastado    tope    uso
+glm-5.2                       $8.8413      $60    15% █
+deepseek-v4-flash             $1.8993      $30     6%
+qwen3.8-max                   $1.6577      $15    11% █
 ```
+
+Esa segunda tabla es la que decide qué hacer ante un `.status=77`: si lo agotado es el tope de un
+modelo, otro modelo Go todavía tiene presupuesto; si es el pozo global, hay que salirse de Go.
 
 ## El invariante
 
@@ -130,7 +139,8 @@ señal, y que el conocimiento de entrenamiento del propio orquestador caduca.
 
 ## Estado
 
-Uso personal, verificado sobre Linux con OpenCode 1.18.15 y codex-cli 0.147.0. Los precios y cuotas
-citados en los SKILL.md se releyeron en la fuente el 2026-08-09 y **caducan**: la fuente de verdad
+Uso personal, verificado sobre Linux con OpenCode 1.18.15 y codex-cli 0.147.0. Los precios, cuotas
+y topes citados en los SKILL.md se releyeron en la fuente el 2026-08-28 y **caducan** —entre el
+2026-08-09 y esa fecha cambió el ruteo entero—: la fuente de verdad
 es `opencode.ai/docs/go`. Ojo con no confundirla con `opencode.ai/docs/zen`, que cotiza los mismos
 modelos a otro precio porque es pago-por-uso.

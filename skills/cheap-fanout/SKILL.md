@@ -33,17 +33,18 @@ prompts al usuario para que él los corra a mano. (Si en esta máquina existe un
 |---|---|---|---|
 | **Orquestador** | Claude/tú (frontier, Opus) | Descompone, rutea, **spot-check**, veredicto y síntesis **final** | El ancho; re-revisar lo ya limpio |
 | **Subteniente** | `kimi-for-coding/k3` (suscripción Allegretto) | Pre-revisa el lote entero en 1 request (1M ctx); 1-2 unidades difíciles; borrador de síntesis | El ancho; planear/rutear |
-| **Ejecutores** | `deepseek-v4-flash`, `mimo-v2.5`, `hy3`, `gpt-5.6-luna`… (Go) y `codex` (Codex CLI) | El ancho: N unidades en paralelo | Decidir o preguntar nada |
+| **Ejecutores** | `mimo-v2.5`, `hy3`, `longcat-2.0`, `qwen3.8-flash`… (Go) y `codex` (Codex CLI) | El ancho: N unidades en paralelo | Decidir o preguntar nada |
 
 ## Flujo (6 pasos)
 
 1. **Descomponer** en N unidades independientes. Ownership disjunto: dos jobs nunca tocan el mismo archivo.
 2. **Rutear** cada unidad al mejor modelo barato (tabla abajo — decide TÚ, no un router LLM).
    La tabla de este archivo es la referencia de ruteo, pero **caduca**: la fuente de verdad de
-   precios y cuotas es `opencode.ai/docs/go`. Si vas a rutear por precio en una decisión cara, o
-   si un número te parece raro, reléela ahí (y no la confundas con `opencode.ai/docs/zen`, que
-   cotiza los mismos modelos a precio de pago-por-uso). Lo que el proveedor sirve hoy te lo dice
-   `opencode models`.
+   precios, cuotas y **topes por modelo** es `opencode.ai/docs/go`. Si vas a rutear por precio en
+   una decisión cara, o si un número te parece raro, reléela ahí (y no la confundas con
+   `opencode.ai/docs/zen`, que cotiza los mismos modelos a precio de pago-por-uso). Lo que el
+   proveedor sirve hoy **no** te lo dice `opencode models` de forma confiable —esa lista viene
+   desfasada—: pruébalo con `opencode run -m <ruta> "Responde exactamente: PONG"`.
 3. **Disparar en paralelo** con `bin/cheap-fanout` (prompts autocontenidos + jobs.tsv).
    Para ediciones que escriben, corre cada job en un git worktree aislado o usa `--dir`.
 4. **Recolectar** los `out_file` (revisa siempre `out_file.status`; 0 = OK).
@@ -100,10 +101,10 @@ B=~/.claude/skills/cheap-fanout/bin/cheap-fanout
 "$B" --parallel 6 jobs.tsv                        # investigación (solo lectura)
 "$B" --dir /ruta/al/repo --parallel 6 jobs.tsv    # si leen/escriben un repo
 "$B" --timeout 3m jobs.tsv                        # cambia el plazo default del lote
-~/.claude/skills/cheap-fanout/bin/go-budget   # cuánto llevas de la cuota Go
+~/.claude/skills/cheap-fanout/bin/go-budget   # ventanas globales + gasto del mes por modelo
 ```
 - El `<model>` admite tres formas (verificadas 2026-08-09):
-  - `deepseek-v4-flash` — sin prefijo ⇒ el helper le pone `opencode-go/` (plan Go).
+  - `mimo-v2.5` — sin prefijo ⇒ el helper le pone `opencode-go/` (plan Go).
   - `kimi-for-coding/k3` — cualquier ruta `<provider>/<id>` de opencode pasa **tal cual**
     (suscripción directa Moonshot; no gasta cuota Go).
   - `codex` o `codex:<model>` — corre por `codex exec` con la suscripción ChatGPT. En jobs codex,
@@ -190,87 +191,173 @@ tiene que ir **literal en la URL dentro del prompt file**. Por eso:
 un agente barato. Crawl4AI self-host (Apache 2.0, undetected browser) es el escalón 4 si algún día
 200 req/mes se quedan cortas — es infra que mantener, no lo montes antes de necesitarlo.
 
-## Ruteo por caso — modelos verificados (OpenCode Go/Zen; precios releídos 2026-08-09)
+## Ruteo por caso — modelos verificados (OpenCode Go; releído 2026-08-28)
 
-Precios per 1M tokens (input/output). Cuota Go en requests por ventana de 5h.
+Precios per 1M tokens (input/output). Cuota Go en requests por ventana de 5h. **`tope`** = los
+dólares mensuales que ESE modelo puede consumir del plan — mecánica **nueva**, léela abajo antes
+de rutear.
 
 | Caso de uso | Primario | Fallback | Por qué |
 |---|---|---|---|
-| **Investigación web / fetch+resumen** | `deepseek-v4-flash` | `mimo-v2.5` | Más barato ($0.14/$0.28), 1M ctx, cuota altísima. **DEFAULT.** |
-| **Mecánico simple en lote** | `deepseek-v4-flash` | `mimo-v2.5` · `codex` | Barato + alta cuota; codex si quieres gastar el presupuesto ChatGPT en vez del Go |
-| **Resumen/ingesta masiva o multimodal** (img/audio/video) | `mimo-v2.5` | `mimo-v2.5-pro` | Multimodal nativo, 1M ctx, mismo precio que flash ($0.14/$0.28) y 30,100 req/5h; el pro ($0.435/$0.87, 3,250/5h) para unidades multimodales difíciles |
-| **Contexto ultra-largo barato** (repo/paper completo) | `deepseek-v4-flash` | `minimax-m3` | flash 1M y baratísimo; M3 si necesitas coding/agentic en ese ctx ($0.30/$1.20) |
-| **Código acotado con spec cerrada** | `hy3` | `qwen3.7-plus` | $0.14/$0.58, 4,300 req/5h, 256K, SWE-bench ~74% con solo 21B activos (295B MoE Tencent) |
-| **Código con razonamiento algorítmico** | `deepseek-v4-pro` | `hy3` | Coding de élite a $0.435/$0.87 — solo cuesta cuota (3,450 req/5h, ~10x menos que flash) |
-| **Código agentic multi-paso (>5 tools)** | `deepseek-v4-flash` | `gpt-5.6-luna` · `kimi-k2.7-code` | El build 0731 de flash fue re-post-entrenado: gana a V4-Pro-Preview en los 9 benchmarks de agente (Terminal Bench 2.1 82.7, DeepSWE 54.4) al mismo precio. Luna gana a flash en DeepSWE/Terminal-Bench y es multimodal ($0.20/$1.20, 2,050/5h) |
-| **Bug-fixing / SWE con repro claro** | `glm-5.2` | `hy3` | SWE bug-fix + artefactos UI. Caro ($1.40/$4.40); hy3 alternativa barata con SWE alto |
-| **Unidad casi-frontier quirúrgica** (1-2 por sesión) | `kimi-for-coding/k3` | `kimi-k3` (Go) · `qwen3.8-max` · `grok-4.5` | K3 por la suscripción directa Moonshot (Allegretto) NO gasta cuota Go; la vía Go (110 req/5h) queda de fallback. Nunca en el ancho |
+| **Investigación web / fetch+resumen** | `mimo-v2.5` | `longcat-2.0` | $0.14/$0.28, 1M ctx, 30,100 req/5h, tope $60 y **gemelo free vivo**. **DEFAULT del ancho.** |
+| **Mecánico simple en lote** | `mimo-v2.5` | `qwen3.8-flash` · `codex` | Mismo caballo; `qwen3.8-flash` ($0.15/$0.47, 5,400/5h) si quieres no tocar el tope de mimo; codex si prefieres gastar ChatGPT |
+| **Resumen/ingesta masiva o multimodal** (img/audio/video) | `mimo-v2.5` | `deepseek-v4-flash-vision-exp` · `mimo-v2.5-pro` | mimo es multimodal nativo, 1M ctx y el más barato con tope $60. El vision-exp factura las imágenes como tokens de input y solo tiene tope $15 |
+| **Contexto ultra-largo barato** (repo/paper completo) | `mimo-v2.5` | `longcat-2.0` · `minimax-m3` | Los tres con 1M ctx y tope $60; longcat cachea a $0.006/1M (lo más barato del pool para releer lo mismo) |
+| **Código acotado con spec cerrada** | `hy3` | `qwen3.7-plus` | $0.14/$0.58, 4,300 req/5h, 256K, tope $60 y **ahora sí tiene gemelo free** (`opencode/hy3-free`) |
+| **Código agentic multi-paso (>5 tools)** | `deepseek-v4-flash` | `gpt-5.6-luna` · `kimi-k2.7-code` | Sigue siendo el mejor agentic barato, pero **ya no es el default**: subió a $0.22/$0.66 (el doble en horas peak), cayó a 7,600 req/5h, su tope es $30 y **perdió su gemelo free**. Úsalo cuando de verdad necesites el agentic, fuera de peak |
+| **Bug-fixing / SWE con repro claro** | `glm-5.2` | `hy3` | SWE bug-fix + artefactos UI, tope $60. Caro ($1.40/$4.40): 880 req/5h |
+| **Código con razonamiento algorítmico** | `deepseek-v4-pro` | `kimi-k2.7-code` | Coding de élite, pero se encareció fuerte: $0.66/$1.98 off-peak, 1,050 req/5h y tope **$15**. Ya no es "barato en $" — trátalo como semi-quirúrgico |
+| **Unidad casi-frontier quirúrgica** (1-2 por sesión) | `kimi-for-coding/k3` | `kimi-k3` (Go) · `qwen3.8-max` · `glm-5.3` | K3 por la suscripción directa Moonshot (Allegretto) NO gasta cuota Go; la vía Go (110 req/5h, tope $15 ⇒ ~490 req/mes) queda de fallback. Nunca en el ancho |
 | **Delicado / frontier** (arquitectura, seguridad, semántica, revisión y síntesis) | **orquestador (tú/Claude, Opus)** | — | NUNCA a un barato |
 
-### Catálogo completo del pool Go (cuota → precio → contexto)
+### Catálogo completo del pool Go (cuota → tope → precio → contexto)
 
-Cuotas y precios releídos en `opencode.ai/docs/go` el **2026-08-09**; los contextos vienen de la
-documentación de cada proveedor (esa página no los publica).
+Cuotas, topes y precios releídos en `opencode.ai/docs/go` el **2026-08-28**; contextos de
+`models.dev/api.json`; la columna "free" se probó con `opencode run` ese mismo día.
 
-| id | req/5h | $/1M in/out | ctx | Nota |
-|----|-------:|---|:--:|------|
-| `deepseek-v4-flash` | 31,650 | $0.14/$0.28 | 1M | DEFAULT. Build **0731**: agentic al nivel de pro |
-| `mimo-v2.5` | 30,100 | $0.14/$0.28 | 1M | Multimodal nativo, cuota altísima, precio de flash |
-| `hy3` | 4,300 | $0.14/$0.58 | 256K | Tencent 295B/21B act. Razonamiento/SWE altos, baratísimo |
-| `qwen3.7-plus` | 4,300 | $0.40/$1.60 | 256K | Tool-calling+MCP, think/no_think. **Escalón: >256K tokens factura $1.20/$4.80** |
-| `deepseek-v4-pro` | 3,450 | $0.435/$0.87 | 1M | Coding de élite, 3 modos. Barato en $, caro en cuota. (En Zen cuesta $1.74/$3.48 — no confundir, ver regla 5) |
-| `minimax-m2.7` | 3,400 | $0.30/$1.20 | 192K | Gen previa de M3 |
-| `qwen3.6-plus` | 3,300 | $0.50/$3.00 | — | Gen previa de 3.7-plus. **Escalón >256K: $2.00/$6.00** |
-| `mimo-v2.5-pro` | 3,250 | $0.435/$0.87 | 1M | Multimodal reforzado |
-| `minimax-m3` | 3,200 | $0.30/$1.20 | 1M | Frontier-coding barato, agentic ctx largo |
-| `gpt-5.6-luna` | 2,050 | $0.20/$1.20 | 1.05M | OpenAI tier barato; agentic/multimodal fuerte. **Escalón: >272K tokens factura $0.40/$1.80.** Mismo modelo que puede correr Codex CLI |
-| `kimi-k2.7-code` | 1,350 | $0.95/$4.00 | 262K | Coding agentic multi-paso |
-| `kimi-k2.6` | 1,150 | $0.95/$4.00 | 262K | Gen previa de k2.7 |
-| `glm-5.2` | 880 | $1.40/$4.40 | 1M | SWE bug-fixing, artefactos UI |
-| `glm-5.1` | 880 | $1.40/$4.40 | 200K | Gen previa de 5.2 |
-| `qwen3.7-max` | 340 | $2.50/$7.50 | — | Quirúrgico |
-| `qwen3.8-max` | 160 | $2.00/$6.00 | 1M | 2.4T multimodal flagship. Quirúrgico |
-| `grok-4.5` | 120 | $2.00/$6.00 | 500K | Quirúrgico. **Escalón punitivo: ≥200K tokens factura TODO el request a $4.00/$12.00** |
-| `kimi-k3` | 110 | $3.00/$15.00 | 1M | Casi-frontier abierto. Quirúrgico. **Preferir la puerta `kimi-for-coding/k3`** (suscripción directa, no gasta Go) |
+| id | req/5h | tope $/mes | $/1M in/out | ctx | free | Nota |
+|----|-------:|:----------:|---|:--:|:--:|------|
+| ~~`muse-spark-1.2-contributor`~~ | 45,300 | $60 | $0.10/$0.20 | 1M | ✅ | 🚫 **VETADO** — entrena con tus datos y no es ZDR. Tiene la cuota más alta del pool; no importa. Ver *Modelos vetados* |
+| `mimo-v2.5` | 30,100 | $60 | $0.14/$0.28 | 1M | ✅ | **DEFAULT.** Multimodal nativo, cuota altísima, tope completo, gemelo free |
+| `longcat-2.0` | 11,400 | $60 | $0.30/$1.20 | 1M | — | Segunda cuota más alta con ZDR. Cache a $0.006/1M |
+| `deepseek-v4-flash` | 7,600 | **$30** | $0.22/$0.66 · peak $0.44/$1.32 | 1M | — | Ex-default. Agentic fuerte, pero 4x menos cuota que antes y sin free |
+| `qwen3.8-flash` | 5,400 | $30 | $0.15/$0.47 | 1M | — | Barato y 1M ctx; buen segundo del ancho |
+| `hy3` | 4,300 | $60 | $0.14/$0.58 | 256K | ✅ | Tencent 295B/21B act. Razonamiento/SWE altos, baratísimo, **ahora con gemelo free** |
+| `qwen3.7-plus` | 4,300 | $60 | $0.40/$1.60 | 1M | — | Tool-calling+MCP. **Escalón: >256K tokens factura $1.20/$4.80** |
+| `deepseek-v4-flash-vision-exp` | 3,800 | **$15** | $0.22/$0.66 · peak $0.44/$1.32 | 1M | — | Visión: las imágenes se facturan como tokens de input |
+| `minimax-m2.7` | 3,400 | $60 | $0.30/$1.20 | 200K | — | Gen previa de M3 |
+| `qwen3.6-plus` | 3,300 | $60 | $0.50/$3.00 | 1M | — | **Escalón >256K: $2.00/$6.00** |
+| `mimo-v2.5-pro` | 3,250 | **$15** | $0.435/$0.87 | 1M | — | Multimodal reforzado |
+| `minimax-m3` | 3,200 | $60 | $0.30/$1.20 | 1M | — | Frontier-coding barato, agentic ctx largo |
+| `gpt-5.6-luna` | 2,050 | **$15** | $0.20/$1.20 | 1.05M | — | **Escalón >272K: $0.40/$1.80.** Retiene datos 30 días. Mismo modelo que puede correr Codex CLI |
+| `glm-5.3-flash` | 1,580 | **$15** | $0.15/$0.50 | 1M | — | Barato con 1M ctx, pero tope bajo |
+| `kimi-k2.7-code` | 1,350 | $60 | $0.95/$4.00 | 256K | — | Coding agentic multi-paso |
+| `kimi-k2.6` | 1,150 | $60 | $0.95/$4.00 | 256K | — | Gen previa de k2.7 |
+| `deepseek-v4-pro` | 1,050 | **$15** | $0.66/$1.98 · peak $1.32/$3.96 | 1M | — | Coding de élite. Ya NO es barato: 3x menos cuota y tope $15 |
+| `glm-5.2` | 880 | $60 | $1.40/$4.40 | 1M | — | SWE bug-fixing, artefactos UI |
+| `glm-5.1` | 880 | $60 | $1.40/$4.40 | 200K | — | Gen previa de 5.2 |
+| `qwen3.7-max` | 340 | $60 | $2.50/$7.50 | 1M | — | Quirúrgico |
+| `glm-5.3` | 220 | **$15** | $1.40/$4.40 | 1M | — | Quirúrgico |
+| ~~`grok-4.6`~~ | 169 | **$15** | $2.00/$6.00 | 500K | — | 🚫 **VETADO** — regresión agentic y TTFT de 31s. Ver *Modelos vetados* |
+| `qwen3.8-max` | 160 | **$15** | $2.00/$6.00 | 1M | — | 2.4T multimodal flagship. Quirúrgico |
+| `kimi-k3` | 110 | **$15** | $3.00/$15.00 | 1M | — | Casi-frontier abierto. **Preferir la puerta `kimi-for-coding/k3`** (suscripción directa, no gasta Go) |
 
-> **Precio ≠ cuota.** La regla "más barato ⇒ más cuota" es aproximada, no exacta:
-> `deepseek-v4-pro` cuesta $0.435 pero solo da 3,450 req/5h. Lo que se agota es la **cuota**, así
-> que el ancho va a los de cuota alta (`flash`/`mimo`/`hy3`); los de <400 req/5h
-> (`qwen3.7-max`, `qwen3.8-max`, `grok-4.5`, `kimi-k3`) son para 1-2 unidades quirúrgicas por
-> sesión, nunca para el ancho.
+**Notas del catálogo:**
+- `minimax-m2.5` sale en la tabla de precios ($0.30/$1.20, tope $60, 200K) pero no en la de cuotas.
+- `hy4-preview` está en la doc (1,350 req/5h, $0.834/$2.501, tope $30) pero **hoy no responde**
+  desde esta cuenta (`UnknownError`, dos intentos 2026-08-28). No lo rutees hasta que conteste.
+- `grok-4.5` desapareció de la doc y `grok-4.6` está vetado: **la familia Grok entera queda fuera del ruteo.**
+- **`opencode models` está desactualizado y NO es la autoridad**: el 2026-08-28 no listaba
+  `grok-4.6`, `longcat-2.0`, `glm-5.3-flash` ni `qwen3.8-flash`, y los cuatro responden; en
+  cambio sí listaba `ox-alpha-free` y `x-preview-f-free`, que fallan. La prueba real de que un
+  modelo existe es un `opencode run -m <ruta> "Responde exactamente: PONG"`.
 
-## Cuota Go agotada — el helper lo maneja solo
+> **Precio ≠ cuota ≠ tope.** Son tres cosas: `deepseek-v4-pro` cuesta $0.66 pero solo da 1,050
+> req/5h y no puede pasar de $15/mes. El ancho va a los de cuota alta **con tope $60**
+> (`mimo-v2.5`, `hy3`, `longcat-2.0`); los de <400 req/5h (`qwen3.7-max`, `glm-5.3`, `qwen3.8-max`,
+> `kimi-k3`) son 1-2 unidades quirúrgicas por sesión, nunca el ancho.
 
-**Nunca prohíbas un modelo a mano por cuota.** No hace falta y además no sirve: el plan Go limita
-por **dólares** con un **pozo único compartido** ($12/5h · $30/semana · $60/mes, verificado en
-`opencode.ai/docs/go`: *"Limits are defined in dollar value"*). Cambiar de `deepseek-v4-flash` a
-`mimo-v2.5` no consigue un dólar más — comen del mismo pozo.
+### Peak/off-peak de DeepSeek (mecánica nueva)
 
-**Lo que sí funciona, y ya está automatizado:**
+Los tres modelos DeepSeek (`v4-flash`, `v4-flash-vision-exp`, `v4-pro`) cuestan **el doble** en
+horas peak: **01:00-04:00 y 06:00-10:00 UTC, lunes a viernes**; todo lo demás, fines de semana
+incluidos, es off-peak. En hora de CDMX (UTC-6) el peak cae **domingo a jueves 19:00-22:00** y
+**lunes a viernes 00:00-04:00**. Un lote grande de DeepSeek corrido a las 20:00 de CDMX consume el
+doble de tope que el mismo lote a las 10:00. Ningún otro modelo del pool tiene esta mecánica.
 
-1. **Antes de un lote grande, mide.** `bin/go-budget` lee la base local de opencode y te dice el
-   consumo de las tres ventanas. Exit code: `0` holgado · `1` ≥80% · `2` agotado. Si marca 1 o 2,
-   manda el ancho directo a los modelos free y reserva Go para lo que no tenga gemelo.
-2. **Durante el lote, el helper detecta y rescata.** Al ver la firma
-   `Provider rate limit exceeded` en la salida de un job, lo reintenta **una vez en el gemelo
-   gratuito del mismo modelo** (`opencode/<id>-free`), que la doc de Go señala explícitamente:
-   *"If you reach the usage limit, you can continue using the free models"*. Es el **mismo modelo**,
-   presupuesto distinto — no cambia la calidad. `--on-quota off` lo desactiva.
+### Privacidad de los modelos Go (tabla nueva en la doc)
+
+Casi todo el pool es **sin entrenamiento y 0 días de retención**. Las excepciones importan:
+
+| Modelo | Entrenamiento | Retención |
+|---|---|---|
+| `muse-spark-1.2-contributor` | **Sí, entrena con tus datos** | **No es ZDR** |
+| `grok-4.6`, `gpt-5.6-luna` | No | 30 días |
+| DeepSeek (`v4-pro`, `v4-flash`, `v4-flash-vision-exp`) | No | 0 días* |
+| Todos los demás | No | 0 días |
+
+Esa tabla es la razón del primer veto: ver abajo.
+
+## Modelos vetados — decisión permanente de Antonio (2026-08-28)
+
+**Dos modelos del pool NO se usan, aunque los números inviten.** No es una preferencia de esta
+sesión: es política del skill, y el helper la aplica sola (`bin/cheap-fanout` rechaza el job antes
+de lanzarlo). Están marcados 🚫 en el catálogo a propósito, en vez de borrados, para que una
+relectura futura de la doc no los "redescubra" por su cuota y los vuelva a meter al ruteo.
+
+| Vetado | Por qué |
+|---|---|
+| `muse-spark-1.2-contributor` **y su gemelo free** | Es un trato explícito "cuota gigante a cambio de tus datos": mismos pesos que `muse-spark-1.2` ($1.25/$4.25) a 12x menos en input porque Meta usa lo que le mandes para mejorar sus productos. Entrena y no es ZDR. Que tenga la cuota más alta del pool (45,300 req/5h) es justamente el anzuelo |
+| `grok-4.6` | Sustituyó a `grok-4.5` subiendo 5 puntos de índice de inteligencia, pero su **agentic coding regresó** (LiveBench 54.2 vs 56.5 de 4.5) y su time-to-first-token pasó de 8.7s a 31.2s — 3.5x peor. En un lote con plazo por job, eso mata asientos sanos. Además retiene datos 30 días |
+
+**Con qué se cubren sus casos:** el volumen bruto que habría ido a muse-spark va a `mimo-v2.5`
+(30,100 req/5h, mismo tope $60, 0 días de retención) y a `longcat-2.0`; el asiento quirúrgico que
+habría ido a grok va a `kimi-for-coding/k3`, `qwen3.8-max` o `glm-5.3`.
+
+**Si alguna vez quieres saltarte el veto** (una prueba puntual, material 100% público): el helper
+lo permite con `CHEAP_FANOUT_ALLOW_VETOED=1` en esa invocación. No lo pongas en tu perfil.
+
+## Cuota Go: DOS límites, no uno (cambió en agosto 2026)
+
+Hasta hace poco el plan Go era un **pozo único** de dólares y cambiar de modelo no conseguía ni un
+dólar más. **Eso ya no es cierto.** Hoy hay dos límites simultáneos:
+
+1. **El pozo global**, sin cambios: **$12/5h · $30/semana · $60/mes**, compartido por todos los modelos.
+2. **Un tope mensual POR MODELO** (columna `tope` del catálogo): **$60, $30 o $15** según el modelo.
+   La doc lo explica en *"Why some models have lower usage"*: pagas $10 y apuntan a darte 6x en uso
+   ($60); donde no consiguieron descuento con el proveedor, el multiplicador baja a 3x ($30) o
+   1.5x ($15).
+
+**Consecuencia operativa, y es la que cambia tu comportamiento:** agotar un modelo ya **no** agota
+el plan. Si `deepseek-v4-flash` topó sus $30 del mes, `mimo-v2.5` todavía tiene su propio carril
+de $60 — mientras el pozo global aguante. **Cambiar de modelo ahora sí consigue presupuesto.**
+Lo que ya no consigue nada es cambiar de modelo cuando lo que se agotó fue el pozo global.
+
+Por eso, ante un fallo de cuota, el diagnóstico es primero y la sustitución después:
+
+```bash
+~/.claude/skills/cheap-fanout/bin/go-budget      # ventanas globales + gasto mensual por modelo
+```
+
+- **Pozo global apretado/agotado** (5h, 7d o 30d en rojo) → cambiar de modelo Go no sirve: vete a
+  los free, a `codex` o a `kimi-for-coding/k3`.
+- **Solo el tope de UN modelo agotado** (el global holgado) → cambia ese job a otro modelo Go con
+  tope disponible. Es una decisión de calidad, así que la tomas tú: el helper nunca sustituye un
+  modelo por otro solo.
+
+**Lo que sí está automatizado:**
+
+1. **Antes de un lote grande, mide.** `go-budget` lee la base local de opencode y te da las tres
+   ventanas globales **y el gasto del mes por modelo contra su tope**. Exit code: `0` holgado ·
+   `1` apretado (≥80% en una ventana, o algún modelo pasado de su tope) · `2` global agotado.
+2. **Durante el lote, el helper detecta y rescata.** Al ver la firma `Provider rate limit exceeded`
+   reintenta el job **una vez en el gemelo gratuito del mismo modelo** (`opencode/<id>-free`), que
+   la doc de Go señala explícitamente: *"If you reach the usage limit, you can continue using the
+   free models"*. Mismo modelo, presupuesto distinto, misma calidad. `--on-quota off` lo desactiva.
 3. **Si no hay gemelo free, el helper NO sustituye el modelo.** Deja el job en `.status=77`
-   ("SIN CUOTA") y te lo reporta. Cambiar `kimi-k3` por otra cosa es una decisión de calidad y
-   es tuya, no del script.
+   ("SIN CUOTA") y te lo reporta, para que decidas tú entre otro modelo Go, un free, codex o K3.
 
-Gemelos free verificados (2026-08-09, responden y cuestan $0): `deepseek-v4-flash` y `mimo-v2.5`
-— justo los dos caballos de batalla del ancho. `hy3`, `kimi-k3`, `glm-5.2` y los demás no tienen.
-Hay más modelos free sin gemelo Go (`opencode/big-pickle`, `longcat-2.0-free`, `nemotron-3-ultra-free`…)
-que puedes usar a propósito para el ancho cuando quieras no gastar cuota en absoluto.
+**Gemelos free — la lista cambió, revísala (probados con `opencode run` el 2026-08-28):**
+
+| Modelo Go | Gemelo free | Estado |
+|---|---|---|
+| `mimo-v2.5` | `opencode/mimo-v2.5-free` | ✅ responde |
+| `hy3` | `opencode/hy3-free` | ✅ responde (**nuevo**; antes no tenía) |
+| ~~`muse-spark-1.2-contributor`~~ | ~~`opencode/muse-spark-1.2-contributor-free`~~ | 🚫 responde, pero está **vetado** — el gemelo free entrena igual |
+| `deepseek-v4-flash` | ~~`opencode/deepseek-v4-flash-free`~~ | ❌ **muerto** (`UnknownError`, dos intentos) |
+
+Ese último renglón es la razón principal para haber movido el default a `mimo-v2.5`: el
+ex-default se quedó sin red de rescate automático. Otros `*-free` que aparecen en `models.dev`
+(`longcat-2.0-free`, `minimax-m3-free`, `qwen3.6-plus-free`, `x-preview-f-free`, `ox-alpha-free`)
+**no responden** desde esta cuenta — no los pongas en un jobs.tsv sin probarlos. Free sin gemelo
+que sí responde: `opencode/big-pickle`. `opencode/nemotron-3-ultra-free` contestó vacío.
 
 **Los cuatro presupuestos, independientes entre sí:**
 
 | Puerta | En `jobs.tsv` | Presupuesto | Para qué |
 |---|---|---|---|
-| Go | `deepseek-v4-flash` | $12/5h compartido | el ancho, por default |
-| Free | `opencode/deepseek-v4-flash-free` | gratis | el ancho cuando Go aprieta; fallback automático |
+| Go | `mimo-v2.5` | $12/5h · $30/sem · $60/mes globales **+ tope por modelo** | el ancho, por default |
+| Free | `opencode/mimo-v2.5-free` | gratis | el ancho cuando Go aprieta; fallback automático |
 | ChatGPT | `codex` / `codex:<m>` | ventana ChatGPT | código/mecánico; **no** investigación web |
 | Allegretto | `kimi-for-coding/k3` | suscripción Moonshot | pre-revisión y quirúrgico |
 
@@ -306,7 +393,8 @@ lo lanza como `codex exec --skip-git-repo-check --ephemeral -s read-only -o out_
   apuntes al repo real y revisa el diff antes de mergear. (Arreglo de fondo, decisión del usuario:
   perfil AppArmor para bwrap o bajar ese sysctl — es un ajuste de seguridad de todo el sistema.)
 - **Luna por dos puertas — cómo alternar suscripciones:** la puerta se elige por job en el campo
-  `model` del jobs.tsv: `gpt-5.6-luna` → `opencode run` → cuota **Go** (2,050 req/5h);
+  `model` del jobs.tsv: `gpt-5.6-luna` → `opencode run` → cuota **Go** (2,050 req/5h, pero tope
+  **$15/mes** ⇒ ~10,250 req/mes y se acaba mucho antes que el pozo global);
   `codex:gpt-5.6-luna` → `codex exec` → cuota **ChatGPT**. Mismo modelo, presupuestos
   independientes; un mismo lote puede mezclar ambas. Regla: el ancho con Luna va por **Go** (su
   cuota es mucho mayor); `codex` es desborde — úsalo cuando Go dé 429 o quieras reservar la
@@ -326,7 +414,8 @@ uso ≈5× el plan base; Moonshot no publica cifras exactas).
   Si devuelve `UnknownError` genérico → falta la credencial, no es congestión.
 - **Guardrails:** pre-revisión solo con lotes ≥3 · K3 NUNCA en el ancho · máx 1-2 unidades
   difíciles por fan-out · puerta primaria `kimi-for-coding/k3` (no gasta cuota Go), fallback
-  `opencode-go/kimi-k3` (110 req/5h) solo si Allegretto falla.
+  `opencode-go/kimi-k3` (110 req/5h y tope **$15/mes** ⇒ ~490 req al mes en total) solo si
+  Allegretto falla.
 - **Guardrail de latencia (lección jul-2026):** si la pre-revisión tarda >5 min, mátala y revisa
   TÚ el lote completo; si reincide en la sesión, cae de vuelta a dos niveles. El flujo NUNCA se
   bloquea por K3: veredicto imparseable o 429 → revisión completa tuya.
@@ -354,8 +443,9 @@ uso ≈5× el plan base; Moonshot no publica cifras exactas).
   (síntesis solo de unidades OK, con URL fuente por dato)
   ===FIN===
   ```
-- **Cuatro presupuestos, misma disciplina:** Go (el ancho barato) · free (`opencode/*-free`, el
-  ancho cuando Go aprieta; también el rescate automático) · ChatGPT/codex (desborde de
+- **Cuatro presupuestos, misma disciplina:** Go (el ancho barato; recuerda que dentro de Go cada
+  modelo tiene además su propio tope mensual) · free (`opencode/*-free`, el ancho cuando Go
+  aprieta; también el rescate automático) · ChatGPT/codex (desborde de
   código/mecánico) · Allegretto (K3: pre-revisión + quirúrgico). El orquestador alterna por job
   en el campo `model` y conserva el veredicto final.
 
@@ -373,18 +463,18 @@ uso ≈5× el plan base; Moonshot no publica cifras exactas).
 4. **Tu propio conocimiento de entrenamiento caduca.** Un dato *sourced* que te parezca "alucinación"
    puede ser correcto y tú estar desactualizado. Verifica en la primaria; no lo descartes por corazonada.
    *(Ejemplo real: DeepSeek-V4, MiMo-V2.5 y MiniMax-M3 —jul-2026— parecían inventados y eran reales.)*
-5. **Los números de ESTE archivo también caducan, y hay DOS tablas de precios de opencode.**
-   `opencode.ai/docs/go` = tu plan ($10/mes): sus precios no se te cobran, son la tarifa contable
-   que consume los límites ($12/5h, $30/sem, $60/mes). `opencode.ai/docs/zen` = pay-as-you-go,
-   dinero real. **No son iguales:** `deepseek-v4-pro` vale $0.435/$0.87 en Go y $1.74/$3.48 en Zen
-   (4x); `deepseek-v4-flash` vale $0.14/$0.28 en las dos. Esta tabla usa **Go**, que es lo que
-   gobierna cuándo te quedas sin ventana. Si un número te parece raro, revisa de cuál de las dos
-   páginas viene antes de "corregirlo". *(Lección 2026-08-09: un borrador de este skill traía la
-   cifra Zen de v4-pro en una tabla de ruteo Go — el número era real, el producto era el
-   equivocado.)*
-   **Alza anunciada:** DeepSeek dice en la nota al pie 2 de `api-docs.deepseek.com/quick_start/pricing/`
-   (leída 2026-08-09): *"We plan to raise the overall pricing for DeepSeek API services in the near
-   future, with a significant increase expected."* Sin fecha. Lo anunció DeepSeek, no OpenCode.
+5. **Los números de ESTE archivo caducan de verdad — relee la doc antes de una decisión cara.**
+   Entre el 2026-08-09 y el 2026-08-28 cambió el ruteo entero: DeepSeek subió de precio (el alza
+   que DeepSeek había anunciado "sin fecha" **se cumplió**), `deepseek-v4-flash` pasó de 31,650 a
+   7,600 req/5h y perdió su gemelo free, aparecieron los **topes mensuales por modelo** y entraron
+   seis modelos nuevos. Nada de eso se avisa: se descubre releyendo.
+   Hay además **DOS tablas de precios**. `opencode.ai/docs/go` = tu plan ($10/mes): sus precios no
+   se te cobran, son la tarifa contable que consume los límites. `opencode.ai/docs/zen` =
+   pay-as-you-go, dinero real. Pueden divergir mucho (el caso clásico era v4-pro, 4x más caro en
+   Zen — al 2026-08-28 ya convergieron, así que ni siquiera el ejemplo aguanta). Esta tabla usa
+   **Go**. Si un número te parece raro, revisa de cuál de las dos páginas viene antes de
+   "corregirlo". *(Lección 2026-08-09: un borrador de este skill traía la cifra Zen de v4-pro en
+   una tabla de ruteo Go — el número era real, el producto era el equivocado.)*
 6. **Disciplina de tokens.** El orquestador solo en planear+revisar+síntesis final; el ancho, siempre barato.
 
 ## Troubleshooting
@@ -392,7 +482,7 @@ uso ≈5× el plan base; Moonshot no publica cifras exactas).
 | Síntoma | Arreglo |
 |---|---|
 | Solo corre el primer lote de `--parallel` | Falta el `< /dev/null` del helper — usa bin/cheap-fanout tal cual |
-| `database is locked` (Windows) | Baja `--parallel` a 2-3; reintenta los status≠0. El límite es GLOBAL por máquina: no corras dos lotes cheap-fanout a la vez |
+| `database is locked` | Crónico en Windows (baja `--parallel` a 2-3); en Linux aparece **esporádicamente** aunque vayas en `--parallel 2` — visto 2026-08-28 con otro proceso tocando el mismo SQLite (`go-budget` cuenta). En ambos casos: reintenta los status≠0, no bajes la concurrencia por un caso aislado. El límite es GLOBAL por máquina: no corras dos lotes cheap-fanout a la vez |
 | `.status` = 66 / "SALIDA VACÍA" | Variante silenciosa del choque de SQLite: exit 0 pero el `.out` solo traía cabecera. Reintenta ese job con menos concurrencia y sin otros lotes corriendo |
 | `.status` = 64 / "PROMPT DEMASIADO LARGO" | El prompt excede el argv del sistema (~28 KB en Windows). El job NO se lanzó: reházlo por referencia (rutas de archivos en un prompt corto) o sube `CHEAP_FANOUT_ARGV_MAX` si sabes lo que haces |
 | exit 126 `Argument list too long` (corrido a mano) | El prompt viaja como argumento y Windows topa en ~32 KB. Pásalo por el helper (que lo detecta antes con status 64) o usa prompt por referencia |
@@ -400,7 +490,11 @@ uso ≈5× el plan base; Moonshot no publica cifras exactas).
 | Job devolvió null/basura | Rehazlo o reasígnalo a un modelo mejor; no lo integres a ciegas |
 | `.status` = 124 o 137 | El job venció su plazo y el helper lo mató. Sube la 4ª columna de ESE job (o `none`) y relánzalo; si vence otra vez, el modelo se está atorando: reasigna |
 | `timeout inválido: 'X'` | La 4ª columna solo admite `90`, `30s`, `8m`, `1h` o `none` |
-| `.status` = 77 / "SIN CUOTA" | Go agotado y ese modelo no tiene gemelo free. NO lo cambies por otro modelo Go (mismo pozo): mándalo a `codex`, a `kimi-for-coding/k3`, o a un free a propósito |
+| `.status` = 77 / "SIN CUOTA" | Ese modelo se quedó sin presupuesto y no tiene gemelo free. Corre `go-budget` **antes de decidir**: si lo agotado es el tope de ESE modelo (global holgado), mándalo a otro modelo Go con tope disponible; si lo agotado es el pozo global, cambiar de modelo Go no sirve — vete a `codex`, `kimi-for-coding/k3` o un free |
+| `This model collects data used to improve its quality and requires explicit opt in` | Es `muse-spark-1.2-contributor`, que está **vetado**: no lo actives en la consola. Rutea a `mimo-v2.5` |
+| `MODELO VETADO` (exit 2, no corrió nada) | El helper rechaza el lote **entero en pre-vuelo** si algún job usa un modelo vetado — mejor que gastar cuota en los demás y descubrirlo al final. Cambia el modelo de esa línea (ver *Modelos vetados*), no la variable de entorno |
+| Un modelo de la doc no aparece en `opencode models` | Esa lista viene desfasada; no es autoridad. Pruébalo con `opencode run -m opencode-go/<id> "Responde exactamente: PONG"` antes de descartarlo |
+| Lote DeepSeek gastó el doble de lo esperado | Horas peak (dom-jue 19:00-22:00 y lun-vie 00:00-04:00 CDMX): los tres modelos DeepSeek cuestan 2x. Córrelo fuera de esa franja o usa `mimo-v2.5` |
 | "cuota Go agotada → servido por opencode/…-free" | No es un error: el helper rescató ese job en el gemelo gratuito del mismo modelo. Corre `go-budget` para ver cuánto falta para que se libere la ventana |
 | El agente "no puede buscar" | opencode solo tiene `webfetch`: dale una URL de arranque. codex no tiene web search: reasigna a opencode |
 | El agente reporta 403 / "bloqueado" / página vacía | No es culpa del modelo: el fetcher está bloqueado. Sube la cascada de 3 escalones (`r.jina.ai` → ZenRows GET) |
