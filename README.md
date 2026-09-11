@@ -98,7 +98,7 @@ El campo del modelo elige la **puerta**, y cada puerta es un presupuesto indepen
 Cada job deja `salida.out`, más `.status` (exit code), `.gate` (qué modelo lo sirvió de verdad) y
 `.log` en los jobs codex.
 
-## Las dos cosas que el dispatcher garantiza
+## Las tres cosas que el dispatcher garantiza
 
 **Termina siempre.** Cada job corre bajo `timeout` (15m por default, o el plazo de la 4ª columna).
 Al vencer manda SIGTERM y, 15s después, SIGKILL; el `.status` queda en 124 y el resumen lo reporta.
@@ -110,6 +110,19 @@ $15 según el modelo). Al detectar el error de cuota, el dispatcher reintenta el
 gratuito del mismo modelo** (`opencode/<id>-free`) — mismo modelo, otro presupuesto, misma calidad.
 Si ese modelo no tiene gemelo free, no lo sustituye por otro: deja `.status=77` y te lo dice,
 porque cambiar de modelo es una decisión de calidad y es del orquestador.
+
+**La carrera de arranque de SQLite no te alcanza.** Varios `opencode` arrancando a la vez contra
+una base **fría** se pelean por crearla y migrarla: el perdedor muere con `database is locked` (o
+con `Failed query: CREATE TABLE …`) y exit 1, antes incluso de que exista el logger —por eso
+`--print-logs --log-level DEBUG` no muestra nada de este fallo. La causa es de opencode: instala
+`PRAGMA busy_timeout` *después* de convertir la base a WAL, y su corredor de migraciones hace
+check-then-act. Medido aquí: **15/30 arranques en frío simultáneos mueren; 0/30 con la base ya
+caliente**. El dispatcher precalienta la base en pre-vuelo (una llamada en serie, ~1s, cero tokens,
+con `flock` global para que dos lotes simultáneos tampoco se peleen) y, si aun así un job choca, lo
+reintenta con backoff exponencial + jitter — gratis, porque el choque ocurre antes de llamar al
+modelo. Si agota los reintentos deja `.status=75`. Detalle completo en
+[`Bugs/sqlite-arranque-en-frio.md`](Bugs/sqlite-arranque-en-frio.md); regresión en
+`skills/cheap-fanout/test/`.
 
 `bin/go-budget` te dice antes de lanzar cuánto llevas gastado —las ventanas globales y el gasto
 del mes de cada modelo contra su propio tope—, leyendo la base local de opencode:

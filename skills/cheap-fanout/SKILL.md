@@ -109,20 +109,42 @@ B=~/.claude/skills/cheap-fanout/bin/cheap-fanout
     (suscripción directa Moonshot; no gasta cuota Go).
   - `codex` o `codex:<model>` — corre por `codex exec` con la suscripción ChatGPT. En jobs codex,
     `out_file` trae SOLO el mensaje final; la traza completa queda en `out_file.log`.
-- Concurrencia: en **Linux** el default 6 es razonable (lo medido el 2026-08-09 llega hasta
-  `--parallel 4` con lote mixto de 5 jobs, 0 fallos; arriba de eso no está probado aquí).
-  En **Windows** baja a 2-3 → varias instancias concurrentes de
-  `opencode` chocan con `database is locked` (SQLite) y el job falla silencioso; por eso revisa
-  siempre `.status` y reintenta los status≠0 con menos concurrencia. Los jobs codex no usan ese
-  SQLite (corren `--ephemeral`): un lote mixto reparte mejor la concurrencia.
-  **El límite de Windows (2-3) es GLOBAL por máquina, no por lote:** todas las invocaciones de
-  cheap-fanout comparten el MISMO SQLite de opencode — dos lotes `--parallel 2` a la vez son 4
-  instancias y ya estás en zona de fallo (medido 2026-08-11). No lances dos lotes simultáneos en
-  Windows; y si ya hay un lote corriendo, cuenta sus jobs contra tu `--parallel`.
-  **Ojo con la variante silenciosa del choque:** también puede terminar con **`.status=0` y un
-  `.out` que trae SOLO la cabecera** `> build · <model>` (28 bytes) — pasa el check de status.
-  El helper ya la detecta y la marca `.status=66` ("SALIDA VACÍA"), y los `.out` traen códigos
-  ANSI (`\x1b[0m`) además de la cabecera: cualquier parser tuyo debe limpiarlos antes de medir.
+- Concurrencia: en **Linux** el default 6 es razonable (medido 2026-08-09 hasta `--parallel 4`
+  con lote mixto, 0 fallos). Los jobs codex no tocan el SQLite de opencode (corren
+  `--ephemeral`): un lote mixto reparte mejor la concurrencia.
+
+  **Lo que de verdad limita NO es la concurrencia sostenida, sino el ARRANQUE EN FRÍO**
+  (diagnosticado 2026-09-11 sobre opencode 1.18.29; ver `Bugs/sqlite-arranque-en-frio.md`).
+  Medido en esta máquina:
+
+  | escenario | resultado |
+  |---|---|
+  | 16 `opencode` simultáneos, base ya creada y migrada | **16/16 OK** |
+  | 6 arranques simultáneos sobre base FRÍA, ×5 ensayos | **15/30 murieron** |
+  | lo mismo, precalentando la base antes | **0/30 murieron** |
+
+  O sea: con la base caliente la concurrencia es inofensiva; la ventana de choque se abre solo
+  cuando hay que CREAR o MIGRAR la base — primera corrida tras instalar, canal nuevo,
+  `OPENCODE_DB` nuevo, o **el primer lote después de un upgrade que trae migraciones**. Por eso
+  la receta ya no es "baja `--parallel` en Windows para siempre", sino **precalentar**, que el
+  helper hace solo en pre-vuelo (`opencode db "SELECT 1"`, ~1s, cero tokens, con `flock` global
+  para que dos lotes simultáneos tampoco se peleen). Si aun así un job choca, el helper lo
+  reintenta con backoff exponencial + jitter — barato, porque el choque ocurre ANTES de llamar
+  al modelo. Ajustes: `CHEAP_FANOUT_RETRIES` (3), `CHEAP_FANOUT_RETRY_BASE` (2s),
+  `CHEAP_FANOUT_NO_WARMUP=1`.
+
+  **El choque tiene DOS caras y dan mensajes distintos** — si lo diagnosticas a mano, busca las
+  dos: `database is locked` (perdió la conversión a WAL) y `Failed query: CREATE TABLE …` (dos
+  procesos aplicaron la misma migración; el corredor de opencode hace check-then-act). Hay una
+  **tercera, silenciosa**: `.status=0` con un `.out` que trae SOLO la cabecera `> build · <model>`
+  (28 bytes). El helper marca esa como `.status=66` y también la reintenta.
+
+  **`--print-logs --log-level DEBUG` NO sirve para este fallo:** el proceso muere antes de que
+  exista el logger, así que no imprime ni una línea. Diagnostica por el contenido del `.out`.
+
+  Los `.out` traen códigos ANSI (`\x1b[0m`) además de la cabecera: **cualquier detector tuyo debe
+  limpiarlos primero** — un `grep '^Error:'` sobre el crudo no matchea nunca, porque la línea
+  real es `\x1b[91m\x1b[1mError: \x1b[0mUnexpected error`.
 - **Timeout por job (4ª columna, opcional).** El helper garantiza que termina: cada job corre bajo
   `timeout`, con **15m** por default y `--timeout T` para cambiar el default del lote. La 4ª
   columna manda sobre el default y es donde vive el criterio real, porque tus clases de job no
@@ -516,8 +538,10 @@ uso ≈5× el plan base; Moonshot no publica cifras exactas).
 | Síntoma | Arreglo |
 |---|---|
 | Solo corre el primer lote de `--parallel` | Falta el `< /dev/null` del helper — usa bin/cheap-fanout tal cual |
-| `database is locked` | Crónico en Windows (baja `--parallel` a 2-3); en Linux aparece **esporádicamente** aunque vayas en `--parallel 2` — visto 2026-08-28 con otro proceso tocando el mismo SQLite (`go-budget` cuenta). En ambos casos: reintenta los status≠0, no bajes la concurrencia por un caso aislado. El límite es GLOBAL por máquina: no corras dos lotes cheap-fanout a la vez |
-| `.status` = 66 / "SALIDA VACÍA" | Variante silenciosa del choque de SQLite: exit 0 pero el `.out` solo traía cabecera. Reintenta ese job con menos concurrencia y sin otros lotes corriendo |
+| `database is locked` | Carrera de ARRANQUE, no de concurrencia sostenida: opencode instala `busy_timeout` DESPUÉS de convertir la base a WAL, así que solo muerde con la base fría. El helper ya precalienta y reintenta; si llega hasta ti (`.status=75`), corre `opencode db "SELECT 1"` a mano y relanza, o sube `CHEAP_FANOUT_RETRIES` |
+| `.status` = 75 / "SQLITE BLOQUEADO" | Agotó los reintentos. Misma receta: precalentar a mano y relanzar. Bajar `--parallel` ayuda poco si la base sigue fría |
+| `Failed query: CREATE TABLE …` | La otra cara de la misma carrera: dos procesos fríos aplicaron la misma migración. Reintentar es seguro (DDL transaccional); el helper ya lo hace |
+| `.status` = 66 / "SALIDA VACÍA" | Tercera cara, silenciosa: exit 0 pero el `.out` solo traía cabecera. El helper la reintenta; si persiste, es que el modelo de verdad no dijo nada |
 | `.status` = 64 / "PROMPT DEMASIADO LARGO" | El prompt excede el argv del sistema (~28 KB en Windows). El job NO se lanzó: reházlo por referencia (rutas de archivos en un prompt corto) o sube `CHEAP_FANOUT_ARGV_MAX` si sabes lo que haces |
 | exit 126 `Argument list too long` (corrido a mano) | El prompt viaja como argumento y Windows topa en ~32 KB. Pásalo por el helper (que lo detecta antes con status 64) o usa prompt por referencia |
 | Salida con basura al inicio | Cabecera de opencode (`> build · <model>`) **más códigos ANSI** (`\x1b[0m`): limpia ambos antes de parsear o medir si está vacía |

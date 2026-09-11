@@ -57,12 +57,36 @@
 #     un worktree/dir aislado si el agente va a escribir.
 #   - Junto a cada out_file se escriben:
 #       out_file.status   exit code (0 OK · 124/137 timeout · 77 sin cuota ·
-#                         66 salida vacía · 64 prompt > límite argv · otro = fallo)
+#                         66 salida vacía · 64 prompt > límite argv ·
+#                         75 SQLite bloqueado tras agotar reintentos · otro = fallo)
+#       out_file.retried  solo si hubo reintentos por SQLite: número de intentos que costó
 #       out_file.gate     qué modelo/puerta lo sirvió realmente
 #       out_file.rescued  solo si hubo rescate por cuota: "<modelo original>\t<gemelo free>"
+#   - Carrera de SQLite al arrancar (diagnosticada 2026-09-11; verificada leyendo el bundle de
+#     opencode 1.18.29 local Y el binario de Windows x64 1.18.25, idénticos): opencode abre su
+#     base así —
+#         PRAGMA journal_mode = WAL      ← ya al abrir la conexión nativa
+#         PRAGMA journal_mode = WAL / synchronous / busy_timeout = 5000 / … / migraciones
+#     `busy_timeout` se instala TERCERO. Mientras la base NO esté en WAL —primera corrida, canal
+#     nuevo, OPENCODE_DB nuevo, upgrade con migraciones pendientes— convertirla pide lock
+#     EXCLUSIVO y, sin busy handler instalado, el proceso que llega tarde recibe SQLITE_BUSY al
+#     instante. La capa va envuelta en `orDie`: el proceso MUERE con exit 1 y `database is locked`
+#     antes de que exista el logger, así que --print-logs --log-level DEBUG no muestra nada.
+#     La MISMA ventana fría tiene una segunda cabeza, con otro mensaje: el corredor de
+#     migraciones hace check-then-act (lee las migraciones aplicadas UNA vez y luego las aplica),
+#     así que dos procesos fríos aplican la misma migración y el perdedor muere con
+#     `Failed query: CREATE TABLE …`. Se detectan y reintentan las dos.
+#     Medido en esta máquina: 15/30 arranques en frío simultáneos mueren; 0/30 con la base ya
+#     caliente. Por eso el helper hace DOS cosas:
+#       a) PRE-VUELO: precalienta la base UNA vez, en serie (`opencode db "SELECT 1"`), tomando
+#          un flock global si el sistema lo tiene — así dos lotes simultáneos no se pelean.
+#       b) REINTENTO: si un job igual choca, lo reintenta con backoff exponencial + jitter.
+#          Sale barato: el choque ocurre ANTES de llamar al modelo, así que no cuesta tokens.
+#     Ajustes: CHEAP_FANOUT_RETRIES (3), CHEAP_FANOUT_RETRY_BASE (2s), CHEAP_FANOUT_NO_WARMUP=1.
 #   - status=66 (salida vacía): opencode puede terminar con exit 0 y un .out que trae SOLO la
-#     cabecera `> build · <model>` (variante silenciosa del choque de SQLite bajo concurrencia,
-#     vista en Windows 2026-08-11). El helper marca fallo igual: el .status solo NO basta.
+#     cabecera `> build · <model>` (variante SILENCIOSA de la misma carrera, vista en Windows
+#     2026-08-11). Se reintenta igual que el fallo explícito; si persiste, se marca fallo: el
+#     .status solo NO basta.
 #   - status=64 (prompt largo): el prompt viaja como ARGUMENTO de la línea de comandos. En
 #     Windows (Git Bash → CreateProcess) el límite es ~32 KB; en Linux es ARG_MAX (~2 MB)
 #     menos el entorno. Si el prompt_file excede el límite, el job NO se lanza: falla antes
@@ -84,6 +108,11 @@ ON_QUOTA="free"
 QUOTA_STATUS=77
 EMPTY_STATUS=66
 ARGV_STATUS=64
+LOCK_STATUS=75
+RETRIES="${CHEAP_FANOUT_RETRIES:-3}"
+RETRY_BASE="${CHEAP_FANOUT_RETRY_BASE:-2}"
+NO_WARMUP="${CHEAP_FANOUT_NO_WARMUP:-0}"
+WARM_TRIES=5
 MODELS_CACHE="$(mktemp -u "${TMPDIR:-/tmp}/cheap-fanout-models.XXXXXX")"
 trap 'rm -f "$MODELS_CACHE"' EXIT
 CODEX_SANDBOX="${CHEAP_FANOUT_CODEX_SANDBOX:-read-only}"
@@ -102,6 +131,8 @@ done
 [ -n "$JOBS" ] && [ -f "$JOBS" ] || { echo "cheap-fanout: falta un JOBS.tsv válido" >&2; exit 2; }
 case "$PAR" in ''|*[!0-9]*) echo "cheap-fanout: --parallel debe ser entero" >&2; exit 2;; esac
 [ "$PAR" -ge 1 ] || PAR=1
+case "$RETRIES" in ''|*[!0-9]*) echo "cheap-fanout: CHEAP_FANOUT_RETRIES debe ser entero" >&2; exit 2;; esac
+case "$RETRY_BASE" in ''|*[!0-9]*|0) echo "cheap-fanout: CHEAP_FANOUT_RETRY_BASE debe ser entero > 0" >&2; exit 2;; esac
 
 # normaliza un plazo: imprime "" si es sin-límite, el valor para timeout(1) si es válido,
 # y sale 1 si el formato no sirve.
@@ -207,6 +238,93 @@ is_quota_error() {
   grep -qiE 'provider rate limit exceeded|error from provider \(console go\)' "$1" 2>/dev/null
 }
 
+# La carrera de arranque tiene DOS cabezas y dan mensajes DISTINTOS. Hay que detectar las dos.
+#
+# ANTES DE MIRAR, LIMPIAR ANSI. opencode escribe el error como
+#     \x1b[91m\x1b[1mError: \x1b[0mUnexpected error
+# así que un `grep '^Error:'` sobre el archivo CRUDO no matchea nunca. Esta trampa ya estaba
+# documentada en los hallazgos 2026-08-11 y aun así mordió al escribir este detector: fallaba
+# en silencio y los jobs de la colisión de migraciones NO se reintentaban.
+_clean() { sed -e 's/\x1b\[[0-9;]*m//g' "$1" 2>/dev/null; }
+
+# (1) El lock: `database is locked`, cuando pierden la conversión a WAL sin busy handler.
+is_lock_error() {
+  _clean "$1" | grep -qiE 'database is locked|database table is locked|SQLITE_BUSY'
+}
+#
+# (2) La colisión de migraciones: el corredor de opencode hace CHECK-THEN-ACT — lee UNA vez
+#     `SELECT id FROM migration` y luego aplica las pendientes. Dos procesos fríos leen la misma
+#     lista vacía, los dos aplican la migración 1, y el perdedor muere con:
+#         Error: Unexpected error
+#         Failed query: \n  CREATE TABLE `workspace` (…)
+#     No es SQLITE_BUSY, así que (1) no lo ve. Reintentar es SEGURO: cada migración corre en una
+#     transacción que crea las tablas E inserta su fila en `migration`, y SQLite tiene DDL
+#     transaccional — el perdedor revierte entera y al reintentar ve la migración ya aplicada.
+#     Firma deliberadamente estrecha (tres condiciones) para no confundirla con la salida de un
+#     agente que hable de SQL; un falso positivo solo costaría una re-corrida, nunca corrupción.
+is_migration_race_error() {
+  # descarte barato primero: en un .out normal (la respuesta de un agente) esto no está, y así
+  # no pagamos un sed sobre salidas grandes
+  grep -qE '^Failed query:' "$1" 2>/dev/null || return 1
+  local c; c="$(_clean "$1" | head -40)"
+  printf '%s\n' "$c" | grep -qE '^Error: Unexpected error' || return 1
+  printf '%s\n' "$c" | grep -qiE 'CREATE TABLE|CREATE +(UNIQUE +)?INDEX|ALTER TABLE'
+}
+
+is_init_race_error() { is_lock_error "$1" || is_migration_race_error "$1"; }
+
+# Backoff exponencial CON jitter. El jitter no es adorno: sin él, los N jobs que chocaron en el
+# mismo instante reintentan en el mismo instante y vuelven a chocar. Techo de 30s por intento.
+backoff_secs() {
+  local n="$1" d
+  d=$(( RETRY_BASE * (1 << (n - 1)) ))
+  [ "$d" -gt 30 ] && d=30
+  printf '%s.%03d' "$d" "$(( RANDOM % 1000 ))"
+}
+
+# PRE-VUELO: deja la base de opencode creada, en WAL y migrada ANTES de soltar el lote, para que
+# los jobs no compitan por convertirla (ahí es donde falta el busy_timeout; ver cabecera).
+# `opencode db "SELECT 1"` recorre la misma inicialización que `opencode run` pero no llama a
+# ningún modelo: cuesta ~1s y cero tokens.
+# Si el sistema tiene flock, se toma un lock global para que DOS LOTES simultáneos tampoco se
+# peleen entre sí — esa es la "serialización global de las escrituras de inicialización".
+# Nunca es fatal: si no se puede precalentar, el lote sigue y la capa de reintento lo cubre.
+_warm_try() {
+  local tries=0 rc=0 out
+  out="$(mktemp "${TMPDIR:-/tmp}/cheap-fanout-warm.XXXXXX")" || return 2
+  while :; do
+    rc=0
+    opencode db "SELECT 1" > "$out" 2>&1 < /dev/null || rc=$?
+    [ "$rc" = 0 ] && { rm -f "$out"; return 0; }
+    if ! is_init_race_error "$out"; then
+      # no es la carrera (binario viejo sin `opencode db`, base corrupta, permisos…): no insistas
+      echo "cheap-fanout: aviso — no pude precalentar la base de opencode (exit $rc); sigo igual." >&2
+      sed 's/^/cheap-fanout:   /' "$out" 2>/dev/null | head -3 >&2
+      rm -f "$out"; return 2
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -ge "$WARM_TRIES" ]; then rm -f "$out"; return 1; fi
+    sleep "$(backoff_secs "$tries")"
+  done
+}
+
+warm_opencode_db() {
+  [ "$NO_WARMUP" = 1 ] && return 0
+  local rc=0 lock
+  # el lock lleva el uid: en una máquina con /tmp compartido, el archivo del primer usuario no
+  # es escribible por el segundo y el flock fallaría en silencio
+  lock="${TMPDIR:-/tmp}/cheap-fanout-warmup-$(id -u 2>/dev/null || echo 0).lock"
+  # `: >>` comprueba que de verdad podemos abrirlo antes de apostar el pre-vuelo al flock
+  if command -v flock >/dev/null 2>&1 && : >>"$lock" 2>/dev/null; then
+    ( flock -w 120 9 2>/dev/null || true; _warm_try ) 9>>"$lock"
+    rc=$?
+  else
+    _warm_try; rc=$?
+  fi
+  [ "$rc" = 1 ] && echo "cheap-fanout: aviso — la base de opencode sigue bloqueada tras $WARM_TRIES intentos." >&2
+  return 0
+}
+
 # Caracteres de CUERPO útil en un .out de opencode: sin códigos ANSI (\x1b[…m), sin la cabecera
 # `> build · <model>` y sin espacios/saltos. 0 ⇒ el job "salió bien" pero no dijo nada (variante
 # silenciosa del choque de SQLite bajo concurrencia: .status=0 con solo-cabecera, hallazgo
@@ -232,6 +350,7 @@ free_twin() {
 
 run_one() {
   local model="$1" pf="$2" of="$3" tspec="$4"
+  rm -f "${of}.retried"   # marcador de una corrida anterior: no es reintento de ésta
   if [ ! -f "$pf" ]; then echo "PROMPT FILE NO EXISTE: $pf" > "$of"; return 1; fi
 
   # El prompt viaja como argv. Si excede el límite de ESTE sistema, falla ANTES de lanzar
@@ -276,9 +395,33 @@ run_one() {
       case "$model" in */*) ;; *) mpath="opencode-go/${model}";; esac
       local dirarg=()
       [ -n "$REPO" ] && dirarg=(--dir "$REPO")
-      "${tmo[@]}" opencode run --auto -m "$mpath" "${dirarg[@]}" "$(cat "$pf")" \
-        > "$of" 2>&1 < /dev/null || rc=$?
+      # Reintento de la carrera de SQLite (ver cabecera). Barato: cuando opencode pierde el lock
+      # muere ANTES de llamar al modelo, así que el reintento no gasta tokens. Cubre las TRES
+      # caras de la misma carrera: `database is locked`, la colisión de migraciones
+      # (`Failed query: CREATE TABLE …`) y la silenciosa (exit 0 con .out sin cuerpo).
+      local attempt=0
+      while :; do
+        rc=0
+        "${tmo[@]}" opencode run --auto -m "$mpath" "${dirarg[@]}" "$(cat "$pf")" \
+          > "$of" 2>&1 < /dev/null || rc=$?
+        [ "$attempt" -ge "$RETRIES" ] && break
+        if is_init_race_error "$of" || { [ "$rc" = 0 ] && [ "$(body_chars "$of")" = 0 ]; }; then
+          attempt=$((attempt + 1))
+          sleep "$(backoff_secs "$attempt")"
+          continue
+        fi
+        break
+      done
       echo "$mpath" > "${of}.gate"
+      if [ "$attempt" -gt 0 ]; then
+        printf '%s\n' "$attempt" > "${of}.retried"
+        if ! is_init_race_error "$of" && { [ "$rc" != 0 ] || [ "$(body_chars "$of")" != 0 ]; }; then
+          printf '\n[cheap-fanout] SQLITE: este job chocó con el lock de arranque de opencode y se\n' >> "$of"
+          printf 'rescató tras %s reintento(s).\n' "$attempt" >> "$of"
+        fi
+      fi
+      # si agotó los reintentos y sigue bloqueado, dilo con un status propio (no un genérico 1)
+      is_init_race_error "$of" && rc="$LOCK_STATUS"
 
       # --- cuota Go agotada: puede ser el pozo global o el tope mensual de ESTE modelo, y
       # desde aquí no se distingue. El único fallback seguro —el que no cambia la calidad
@@ -326,6 +469,9 @@ run_one() {
   return "$rc"
 }
 
+# --- pre-vuelo: base de opencode caliente antes de soltar el lote (arreglo de raíz) ---
+[ "$need_opencode" = 1 ] && warm_opencode_db
+
 # --- lanzar con concurrencia acotada; el fail count sale de los .status (confiable) ---
 active=0
 while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
@@ -347,7 +493,7 @@ done < "$JOBS"
 wait
 
 # --- contar fallos releyendo los .status ---
-fail=0; total=0; timedout=0; sincuota=0; rescatados=0; vacios=0; largos=0
+fail=0; total=0; timedout=0; sincuota=0; rescatados=0; vacios=0; largos=0; lockeados=0; reintentados=0
 while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
   model="${model%%$'\r'}"
   [ -z "${model:-}" ] && continue
@@ -355,6 +501,10 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
   of="${of%%$'\r'}"
   total=$((total + 1))
   s="$(cat "${of}.status" 2>/dev/null || echo 1)"
+  if [ -s "${of}.retried" ]; then
+    reintentados=$((reintentados + 1))
+    echo "cheap-fanout: SQLite bloqueó el arranque; $of necesitó $(cat "${of}.retried") reintento(s)" >&2
+  fi
   case "$s" in
     0) if [ -s "${of}.rescued" ]; then
          rescatados=$((rescatados + 1))
@@ -369,6 +519,8 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
              echo "cheap-fanout: SALIDA VACÍA (status=$s) → $of" >&2;;
     "$ARGV_STATUS") fail=$((fail + 1)); largos=$((largos + 1))
              echo "cheap-fanout: PROMPT DEMASIADO LARGO (status=$s) → $of" >&2;;
+    "$LOCK_STATUS") fail=$((fail + 1)); lockeados=$((lockeados + 1))
+             echo "cheap-fanout: SQLITE BLOQUEADO (status=$s) → $of" >&2;;
     *) fail=$((fail + 1)); echo "cheap-fanout: FALLÓ (status=$s) → $of" >&2;;
   esac
 done < "$JOBS"
@@ -378,6 +530,8 @@ msg="cheap-fanout: $((total - fail))/${total} OK, ${fail} fallo(s)"
 [ "$rescatados" -gt 0 ] && msg="$msg (${rescatados} rescatado(s) por modelos free)"
 [ "$vacios" -gt 0 ]     && msg="$msg (${vacios} con salida vacía)"
 [ "$largos" -gt 0 ]     && msg="$msg (${largos} por prompt demasiado largo)"
+[ "$reintentados" -gt 0 ] && msg="$msg (${reintentados} reintentado(s) por el lock de SQLite)"
+[ "$lockeados" -gt 0 ]  && msg="$msg (${lockeados} bloqueado(s) por SQLite)"
 if [ "$sincuota" -gt 0 ]; then
   msg="$msg (${sincuota} sin cuota y sin gemelo free)"
   echo "$msg" >&2
@@ -392,6 +546,15 @@ if [ "$vacios" -gt 0 ]; then
   echo "$msg" >&2
   echo 'cheap-fanout: salidas vacías = choque de SQLite bajo concurrencia. Reintenta esos jobs' >&2
   echo 'cheap-fanout: con menos --parallel y SIN otros lotes cheap-fanout corriendo a la vez.' >&2
+  exit "$fail"
+fi
+if [ "$lockeados" -gt 0 ]; then
+  echo "$msg" >&2
+  echo 'cheap-fanout: SQLite siguió bloqueado tras los reintentos. Es la carrera de arranque de' >&2
+  echo 'cheap-fanout: opencode (busy_timeout se instala después de convertir a WAL). Opciones:' >&2
+  echo 'cheap-fanout:   - corre `opencode db "SELECT 1"` a mano y relanza el lote' >&2
+  echo 'cheap-fanout:   - sube los reintentos: CHEAP_FANOUT_RETRIES=6' >&2
+  echo 'cheap-fanout:   - baja --parallel; en Windows el límite es GLOBAL por máquina' >&2
   exit "$fail"
 fi
 if [ "$largos" -gt 0 ]; then
