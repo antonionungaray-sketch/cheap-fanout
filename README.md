@@ -22,6 +22,7 @@ barato no hace bien (**planear, rutear, revisar y sintetizar**) y el ancho cuest
 skills/
   cheap-fanout/
     SKILL.md            metodología: roles, ruteo por caso, cuota, reglas de oro
+    reference/          material bajo demanda: catálogo y mediciones, anti-bots, Codex, Kimi, troubleshooting
     PORTABLE-SPEC.md    spec autocontenida para llevarlo a otra máquina (helper embebido)
     bin/cheap-fanout    el dispatcher: lee un jobs.tsv y corre N agentes en paralelo
     bin/go-budget       medidor de consumo del plan OpenCode Go
@@ -63,10 +64,12 @@ quieres editar los skills en su repo y verlos en vivo, sin pasar por el ciclo de
 | [OpenCode CLI](https://opencode.ai) ≥ 1.18 + plan **Go** | los agentes baratos | sí |
 | `bash` + `timeout` (coreutils) | el dispatcher y sus plazos | sí |
 | [Codex CLI](https://github.com/openai/codex) + login ChatGPT | jobs `codex`: un segundo presupuesto | no |
-| Suscripción **Kimi For Coding** | el subteniente K3 que pre-revisa el lote | no |
+| Suscripción **Kimi For Coding** | K3 como segundo pre-revisor del lote (el primero es un modelo rápido de Go) | no |
 
 Las credenciales de opencode viven en `~/.local/share/opencode/auth.json`, una entrada por
-proveedor (`opencode-go`, `kimi-for-coding`, …). `./install.sh --check` te dice cuáles están activas.
+proveedor (`opencode-go`, `kimi-code-plan-cn`, …; el de Kimi se llamaba `kimi-for-coding` hasta opencode
+1.18.31). `./install.sh --check` te dice cuáles están activas y avisa si tu credencial de Kimi
+sigue bajo el nombre viejo.
 
 ## Cómo funciona el dispatcher
 
@@ -77,9 +80,9 @@ Un `jobs.tsv` separado por TABs, un job por línea:
 ```
 
 ```
-mimo-v2.5	p01.md	o01.out	2m
-kimi-for-coding/k3	p02.md	o02.out	8m
-codex:gpt-5.6-luna	p03.md	o03.out	4m
+deepseek-v4.1-flash	p01.md	o01.out	2m
+kimi-code-plan-cn/k3	p02.md	o02.out	8m
+codex:gpt-6-luna	p03.md	o03.out	4m
 ```
 
 ```bash
@@ -90,7 +93,7 @@ El campo del modelo elige la **puerta**, y cada puerta es un presupuesto indepen
 
 | Forma | Corre por | Presupuesto |
 |---|---|---|
-| `mimo-v2.5` | `opencode run -m opencode-go/<id>` | plan Go |
+| `deepseek-v4.1-flash` | `opencode run -m opencode-go/<id>` | plan Go |
 | `opencode/<id>-free` | `opencode run` | gratis |
 | `<provider>/<id>` | `opencode run -m <ruta>` tal cual | el de ese proveedor |
 | `codex` / `codex:<m>` | `codex exec` | suscripción ChatGPT |
@@ -104,12 +107,15 @@ Cada job deja `salida.out`, más `.status` (exit code), `.gate` (qué modelo lo 
 Al vencer manda SIGTERM y, 15s después, SIGKILL; el `.status` queda en 124 y el resumen lo reporta.
 Sin esto, un agente colgado bloquea el `wait` final para siempre.
 
-**La cuota se maneja sola.** El plan Go limita por **dólares en dos niveles**: un pozo global
-($12/5h · $30/semana · $60/mes) y, desde agosto 2026, un **tope mensual por modelo** ($60, $30 o
-$15 según el modelo). Al detectar el error de cuota, el dispatcher reintenta el job **en el gemelo
-gratuito del mismo modelo** (`opencode/<id>-free`) — mismo modelo, otro presupuesto, misma calidad.
-Si ese modelo no tiene gemelo free, no lo sustituye por otro: deja `.status=77` y te lo dice,
-porque cambiar de modelo es una decisión de calidad y es del orquestador.
+**La cuota se mide por modelo y el dispatcher no decide por ti.** Desde 2026-10-01 el plan Go
+limita por **dólares y por modelo**: cada uno trae un límite mensual (60, 30 o 15 USD en el plan
+Go de 10 USD) del que salen sus ventanas de 5 horas (20%), semana (50%) y mes (100%); la doc ya no
+menciona un pozo global. Agotar un modelo no agota a los demás. Al detectar el error de cuota, el
+dispatcher **no** sustituye el modelo —es una decisión de calidad y es del orquestador— y deja
+`.status=77`. Su rescate automático en el gemelo `opencode/<id>-free` está **apagado**: la doc de
+Zen avisa que esos gemelos "may use collected data to improve the model", el mismo motivo por el
+que `muse-spark` está vetado (`CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1` lo reactiva para material
+público).
 
 **La carrera de arranque de SQLite no te alcanza.** Varios `opencode` arrancando a la vez contra
 una base **fría** se pelean por crearla y migrarla: el perdedor muere con `database is locked` (o
@@ -124,27 +130,24 @@ modelo. Si agota los reintentos deja `.status=75`. Detalle completo en
 [`Bugs/sqlite-arranque-en-frio.md`](Bugs/sqlite-arranque-en-frio.md); regresión en
 `skills/cheap-fanout/test/`.
 
-`bin/go-budget` te dice antes de lanzar cuánto llevas gastado —las ventanas globales y el gasto
-del mes de cada modelo contra su propio tope—, leyendo la base local de opencode:
+`bin/go-budget` te dice antes de lanzar cuánto llevas gastado de cada modelo contra sus tres
+ventanas, leyendo la base local de opencode:
 
 ```
-ventana                       gastado  límite    uso
-5h                            $0.0483      $12     0%
-7d                            $1.0442      $30     3%
-30d                          $17.6254      $60    29% ██
-
-modelo (30d)                  gastado    tope    uso
-glm-5.2                       $8.8413      $60    15% █
-deepseek-v4-flash             $1.8993      $30     6%
-qwen3.8-max                   $1.6577      $15    11% █
+modelo                           30d gastado límite    30d     7d     5h
+kimi-k3                             $0.5414     $15     4%     7%    18% █
+hy3                                 $0.4164     $60     1%     0%     0%
+deepseek-v4-flash                   $0.4027     $30     1%     1%     1%
+glm-5.3-flash                       $0.1559     $60     0%     1%     1%
 ```
 
-Esa segunda tabla es la que decide qué hacer ante un `.status=77`: si lo agotado es el tope de un
-modelo, otro modelo Go todavía tiene presupuesto; si es el pozo global, hay que salirse de Go.
+Esa tabla es la que decide qué hacer ante un `.status=77`: cada modelo tiene su propio carril, así
+que otro modelo Go todavía tiene presupuesto (`GO_PLUS=1` lo compara contra los límites del plan
+de 40 USD).
 
 ## El invariante
 
-Ningún output barato aterriza sin revisión. Los agentes baratos y el subteniente K3 producen
+Ningún output barato aterriza sin revisión. Los agentes baratos y el subteniente (un modelo rápido; K3 como segundo revisor) producen
 **materia prima**, no la respuesta: el orquestador hace spot-check contra fuente primaria, escribe
 la síntesis final y, en código, lee el diff y corre los tests. El skill documenta las lecciones
 caras que sostienen esa regla — entre ellas que la `confidence` auto-reportada de un agente no es
@@ -152,8 +155,11 @@ señal, y que el conocimiento de entrenamiento del propio orquestador caduca.
 
 ## Estado
 
-Uso personal, verificado sobre Linux con OpenCode 1.18.15 y codex-cli 0.147.0. Los precios, cuotas
-y topes citados en los SKILL.md se releyeron en la fuente el 2026-08-28 y **caducan** —entre el
-2026-08-09 y esa fecha cambió el ruteo entero—: la fuente de verdad
-es `opencode.ai/docs/go`. Ojo con no confundirla con `opencode.ai/docs/zen`, que cotiza los mismos
-modelos a otro precio porque es pago-por-uso.
+Uso personal, verificado sobre Linux (Ubuntu 24.04) con OpenCode 1.18.31 y codex-cli 0.159.3. Los
+precios, límites e índices citados en los SKILL.md se releyeron en la fuente el **2026-10-01** y
+**caducan** —entre el 2026-08-28 y esa fecha cambió la mecánica entera del plan—: la fuente de
+verdad es `opencode.ai/docs/go`. Ojo con no confundirla con `opencode.ai/docs/zen`, que cotiza los
+mismos modelos a otro precio porque es pago-por-uso.
+
+Qué cambió y con qué evidencia: [`CHANGELOG.md`](CHANGELOG.md) y
+[`Bugs/hallazgos-2026-10-01.md`](Bugs/hallazgos-2026-10-01.md).

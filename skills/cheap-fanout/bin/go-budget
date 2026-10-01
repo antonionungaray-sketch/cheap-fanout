@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# go-budget — cuánto llevas gastado del plan OpenCode Go, en las ventanas globales y por modelo.
+# go-budget — cuánto llevas gastado del plan OpenCode Go, por modelo y en tres ventanas.
 #
-# El plan Go limita por DÓLARES y desde agosto 2026 tiene DOS límites simultáneos:
-#   1) el pozo GLOBAL compartido por todos los modelos: $12/5h, $30/semana, $60/mes
-#   2) un TOPE MENSUAL POR MODELO: $60, $30 o $15 según el modelo (opencode.ai/docs/go,
-#      sección "Why some models have lower usage": pagas $10 y apuntan a darte 6x; donde no
-#      consiguieron descuento el multiplicador baja a 3x o 1.5x)
-# Por eso agotar un modelo ya NO agota el plan: si deepseek-v4-flash topó sus $30, mimo-v2.5
-# todavía tiene su propio carril de $60 mientras el pozo global aguante. Cambiar de modelo SÍ
-# consigue presupuesto — salvo cuando lo agotado es el pozo global.
+# Desde 2026-10-01 la doc de Go (opencode.ai/docs/go) define los límites POR MODELO, no con un
+# pozo global: cada modelo trae un límite mensual en dólares ($60, $30 o $15 en el plan Go de
+# $10; el plan Go Plus de $40 los multiplica) y de ahí salen sus tres ventanas:
+#     5 horas = 20% del límite mensual · semana = 50% · mes = 100%
+# Un modelo de $60 permite $12/5h, $30/semana y $60/mes (los números que antes eran "el pozo
+# global"); uno de $15 permite $3/5h, $7.50/semana y $15/mes. Agotar un modelo NO agota a los
+# demás: cambiar de modelo SÍ consigue presupuesto. La doc ya no menciona un pozo global
+# compartido; las filas agregadas de abajo son solo informativas y NO mueven el exit code.
 #
 # Uso:
-#   go-budget                 # ventanas globales + gasto del mes por modelo contra su tope
+#   go-budget                 # gasto por modelo contra sus tres ventanas (+ agregado informativo)
 #   go-budget --model <id>    # además, el exit code responde por ESE modelo
-#   go-budget --tsv           # ventana<TAB>gastado<TAB>límite<TAB>pct   (para scripts)
-#                             # las filas por modelo salen como  model:<id><TAB>…
+#   go-budget --tsv           # ventana<TAB>gastado<TAB>límite<TAB>pct   (agregado, para scripts)
+#                             # y model:<id><TAB>gasto30d<TAB>tope<TAB>pct30d<TAB>pct7d<TAB>pct5h
 #   go-budget --quiet         # sin salida; solo el exit code
 #
-# Exit code:  0 = holgado (<80% en las tres ventanas globales y en todos los topes usados)
-#             1 = apretado (≥80% en una ventana global, o algún modelo pasado de su tope)
-#             2 = agotado (≥100% en una ventana global; o en el tope del --model pedido)
+# Exit code:  0 = holgado (<80% en las tres ventanas de todos los modelos usados)
+#             1 = apretado (≥80% en alguna ventana de algún modelo, o alguno pasó su límite)
+#             2 = el --model pedido agotó una de sus ventanas (≥100%)
 #             3 = no se pudo medir (falta opencode o la base)
 #
 # LÍMITES DE ESTA MEDICIÓN (léelos antes de confiar en el número):
@@ -28,11 +28,12 @@
 #   - El `cost` lo calcula opencode con su propia tabla de precios; es su estimación, no la
 #     factura del proveedor. En DeepSeek hay precio peak/off-peak: si el lote corrió en peak,
 #     la estimación puede quedarse corta.
-#   - Las ventanas semanal y mensual se calculan como los últimos 7/30 días corridos. La doc
-#     no dice si el proveedor usa ventana corrida o calendario — si estás cerca del límite,
-#     confirma en la consola: https://opencode.ai/auth
-#   - Los topes por modelo son los de la doc leída el 2026-08-28. Un modelo que no esté en esa
-#     lista sale con tope "?" y no afecta el exit code.
+#   - Las ventanas se calculan como los últimos 5h/7d/30d corridos. La doc no dice si el
+#     proveedor usa ventana corrida o calendario — si estás cerca del límite, confirma en la
+#     consola: https://opencode.ai/auth
+#   - Los límites por modelo son los de la doc leída el 2026-10-01 y asumen el plan Go ($10).
+#     Con Go Plus multiplícalos (GO_PLUS=1 usa los de Go Plus que la doc publica). Un modelo que
+#     no esté en la lista sale con límite "?" y no afecta el exit code.
 set -uo pipefail
 # printf/awk deben usar punto decimal: con locale es_MX, "%.4f" rechaza "0.0443".
 export LC_NUMERIC=C
@@ -45,7 +46,7 @@ while [ $# -gt 0 ]; do
     --quiet) MODE="quiet"; shift;;
     --model) WANT_MODEL="${2:-}"; shift 2 || true
              [ -n "$WANT_MODEL" ] || { echo "go-budget: --model necesita un id" >&2; exit 3; };;
-    -h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit 0;;
     *) echo "go-budget: opción desconocida: $1" >&2; exit 3;;
   esac
 done
@@ -54,108 +55,156 @@ command -v opencode >/dev/null 2>&1 || { echo "go-budget: opencode no está en P
 
 # Modelos vetados (ver SKILL.md). Aquí NO se ocultan: si aparecen con gasto es que algo se los
 # saltó, y eso es justo lo que quieres ver.
-VETADOS="muse-spark-1.2-contributor grok-4.6"
+VETADOS="muse-spark-1.2-contributor muse-spark-1.3-contributor grok-4.6 grok-4.7"
 
-# Topes mensuales por modelo — opencode.ai/docs/go, columna "Usage" (leída 2026-08-28).
-# La tabla se queda COMPLETA a propósito, vetados incluidos: es la contabilidad del plan, no una
-# recomendación de ruteo.
+# Límite mensual por modelo, plan Go — opencode.ai/docs/go, columna "Monthly limit" (2026-10-01).
+# Un modelo con límite 0 es gratuito e ilimitado (se muestra "libre"). La tabla se queda
+# COMPLETA a propósito, vetados y modelos ya retirados de la doc incluidos: es la contabilidad
+# de lo gastado en los últimos 30 días, no una recomendación de ruteo.
 TOPES='
-muse-spark-1.2-contributor 60
 mimo-v2.5 60
+mimo-v2.6-flash 60
 longcat-2.0 60
 hy3 60
+glm-5.3-flash 60
+glm-5.2 60
+deepseek-v4.1-flash 60
 qwen3.7-plus 60
-qwen3.7-max 60
-qwen3.6-plus 60
 minimax-m3 60
 minimax-m2.7 60
-minimax-m2.5 60
 kimi-k2.7-code 60
 kimi-k2.6 60
-glm-5.2 60
-glm-5.1 60
+muse-spark-1.3-contributor 60
+muse-spark-1.2-contributor 60
 deepseek-v4-flash 30
 qwen3.8-flash 30
 hy4-preview 30
-grok-4.6 15
-grok-4.5 15
-gpt-5.6-luna 15
-glm-5.3 15
-glm-5.3-flash 15
-kimi-k3 15
+mimo-v2.6-pro 15
 mimo-v2.5-pro 15
+glm-5.3 15
+kimi-k3 15
 qwen3.8-max 15
 deepseek-v4-pro 15
 deepseek-v4-flash-vision-exp 15
+gpt-6-luna 15
+gpt-5.6-luna 15
+grok-4.7 15
+grok-4.6 15
+longcat-2.5-preview-free 0
+space-bunny-free 0
+minimax-m2.5 60
+qwen3.7-max 60
+qwen3.6-plus 60
+glm-5.1 60
+grok-4.5 15
 '
+# Go Plus ($40/mes): los mismos modelos con el límite que publica la doc (no es un múltiplo único).
+if [ "${GO_PLUS:-0}" = 1 ]; then
+  TOPES='
+mimo-v2.5 120
+mimo-v2.6-flash 120
+longcat-2.0 240
+hy3 240
+glm-5.3-flash 180
+glm-5.2 180
+deepseek-v4.1-flash 120
+qwen3.7-plus 180
+minimax-m3 180
+minimax-m2.7 240
+kimi-k2.7-code 180
+kimi-k2.6 240
+muse-spark-1.3-contributor 120
+muse-spark-1.2-contributor 120
+deepseek-v4-flash 120
+qwen3.8-flash 90
+hy4-preview 120
+mimo-v2.6-pro 60
+mimo-v2.5-pro 60
+glm-5.3 120
+kimi-k3 60
+qwen3.8-max 60
+deepseek-v4-pro 60
+deepseek-v4-flash-vision-exp 60
+gpt-6-luna 60
+gpt-5.6-luna 60
+grok-4.7 60
+grok-4.6 60
+longcat-2.5-preview-free 0
+space-bunny-free 0
+'
+fi
 
-sql='
-SELECT "5h",  COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
+# Gasto por modelo y ventana: modelID<TAB>ventana<TAB>gastado (solo las filas con gasto).
+win_sql() { # $1 = etiqueta, $2 = segundos de la ventana
+  printf 'SELECT json_extract(data,"$.modelID"), "%s", COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
  WHERE json_extract(data,"$.providerID")="opencode-go"
-   AND json_extract(data,"$.time.created") >= (CAST(strftime("%s","now") AS INTEGER)-5*3600)*1000
+   AND json_extract(data,"$.time.created") >= (CAST(strftime("%%s","now") AS INTEGER)-%s)*1000
+ GROUP BY 1' "$1" "$2"
+}
+sql="$(win_sql 5h 18000)
 UNION ALL
-SELECT "7d",  COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
- WHERE json_extract(data,"$.providerID")="opencode-go"
-   AND json_extract(data,"$.time.created") >= (CAST(strftime("%s","now") AS INTEGER)-7*86400)*1000
+$(win_sql 7d 604800)
 UNION ALL
-SELECT "30d", COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
- WHERE json_extract(data,"$.providerID")="opencode-go"
-   AND json_extract(data,"$.time.created") >= (CAST(strftime("%s","now") AS INTEGER)-30*86400)*1000
-'
-raw="$(opencode db "$sql" --format tsv 2>/dev/null | tail -n +2)"
-[ -n "$raw" ] || { [ "$MODE" = quiet ] || echo "go-budget: no pude leer la base de opencode" >&2; exit 3; }
+$(win_sql 30d 2592000)"
 
-# Gasto del mes por modelo (misma ventana corrida de 30 días que la fila "30d").
-sql_m='
-SELECT json_extract(data,"$.modelID"), COALESCE(SUM(json_extract(data,"$.cost")),0) FROM message
- WHERE json_extract(data,"$.providerID")="opencode-go"
-   AND json_extract(data,"$.time.created") >= (CAST(strftime("%s","now") AS INTEGER)-30*86400)*1000
- GROUP BY 1 ORDER BY 2 DESC
-'
-raw_m="$(opencode db "$sql_m" --format tsv 2>/dev/null | tail -n +2)"
+raw="$(opencode db "$sql" --format tsv 2>/dev/null)"; rc=$?
+if [ "$rc" != 0 ]; then
+  [ "$MODE" = quiet ] || echo "go-budget: no pude leer la base de opencode" >&2
+  exit 3
+fi
+raw="$(printf '%s\n' "$raw" | tail -n +2)"   # fuera la cabecera; vacío = sin gasto en 30 días
 
-# límites globales del plan (opencode.ai/docs/go)
-lim_5h=12; lim_7d=30; lim_30d=60
+pct() { awk -v g="${1:-0}" -v l="${2:-0}" 'BEGIN{printf "%.0f", (l>0? g*100/l : 0)}'; }
+bar() { local n=$(( ${1:-0} / 10 )) i=0 b=""; [ "$n" -gt 10 ] && n=10
+        while [ "$i" -lt "$n" ]; do b="${b}█"; i=$((i+1)); done; printf '%s' "$b"; }
+
+# Agregado informativo (suma de todos los modelos). Referencia: las tres ventanas del modelo
+# "típico" del plan ($60 en Go ⇒ $12/$30/$60; $120 en Go Plus ⇒ $24/$60/$120). NO mueve el
+# exit code: la doc ya no documenta un límite compartido.
+REF=60; [ "${GO_PLUS:-0}" = 1 ] && REF=120
+ref5="$(awk -v r="$REF" 'BEGIN{printf "%g", r*0.2}')"; ref7="$(awk -v r="$REF" 'BEGIN{printf "%g", r*0.5}')"
+agg() { printf '%s\n' "$raw" | awk -F'\t' -v w="$1" 'NF>=3 && $2==w{s+=$3} END{printf "%.6f", s+0}'; }
+g5="$(agg 5h)"; g7="$(agg 7d)"; g30="$(agg 30d)"
+
+# Un renglón por modelo: id, gasto30d, gasto7d, gasto5h (ordenado por gasto del mes).
+models="$(printf '%s\n' "$raw" | awk -F'\t' 'NF>=3 && $1!="" && $1!="null"{m[$1]=1; g[$1,$2]=$3}
+  END{for(k in m) printf "%s\t%.6f\t%.6f\t%.6f\n", k, g[k,"30d"]+0, g[k,"7d"]+0, g[k,"5h"]+0}' \
+  | sort -t$'\t' -k2,2gr)"
 
 worst=0
-out=""
-while IFS=$'\t' read -r ventana gastado; do
-  [ -n "${ventana:-}" ] || continue
-  case "$ventana" in 5h) lim=$lim_5h;; 7d) lim=$lim_7d;; 30d) lim=$lim_30d;; *) continue;; esac
-  pct=$(awk -v g="${gastado:-0}" -v l="$lim" 'BEGIN{printf "%.0f", (l>0? g*100/l : 0)}')
-  [ "$pct" -ge 80 ]  && [ "$worst" -lt 1 ] && worst=1
-  [ "$pct" -ge 100 ] && worst=2
-  out="${out}${ventana}\t${gastado}\t${lim}\t${pct}\n"
-done <<< "$raw"
-
-# Filas por modelo. Un modelo sin tope conocido sale con "?" y NO mueve el exit code.
 out_m=""
 modelo_topado=""
 vetado_con_gasto=""
 pct_want=""
-if [ -n "${raw_m:-}" ]; then
-  while IFS=$'\t' read -r mid gastado; do
+if [ -n "${models:-}" ]; then
+  while IFS=$'\t' read -r mid s30 s7 s5; do
     [ -n "${mid:-}" ] || continue
     tope="$(printf '%s\n' "$TOPES" | awk -v m="$mid" '$1==m{print $2; exit}')"
-    if [ -z "$tope" ]; then
-      out_m="${out_m}model:${mid}\t${gastado}\t?\t?\n"
-      continue
-    fi
-    pct=$(awk -v g="${gastado:-0}" -v l="$tope" 'BEGIN{printf "%.0f", (l>0? g*100/l : 0)}')
-    out_m="${out_m}model:${mid}\t${gastado}\t${tope}\t${pct}\n"
     case " $VETADOS " in
-      *" $mid "*) awk -v g="${gastado:-0}" 'BEGIN{exit !(g>0)}' && \
+      *" $mid "*) awk -v g="${s30:-0}" 'BEGIN{exit !(g>0)}' && \
                   vetado_con_gasto="${vetado_con_gasto}${vetado_con_gasto:+, }${mid}";;
     esac
-    [ "$mid" = "$WANT_MODEL" ] && pct_want="$pct"
-    if [ "$pct" -ge 100 ]; then
+    if [ -z "$tope" ]; then
+      out_m="${out_m}model:${mid}\t${s30}\t?\t?\t?\t?\n"; continue
+    fi
+    if [ "$tope" = 0 ]; then
+      out_m="${out_m}model:${mid}\t${s30}\tlibre\t-\t-\t-\n"; continue
+    fi
+    p30="$(pct "$s30" "$tope")"
+    p7="$(pct "$s7" "$(awk -v t="$tope" 'BEGIN{printf "%.4f", t*0.5}')")"
+    p5="$(pct "$s5" "$(awk -v t="$tope" 'BEGIN{printf "%.4f", t*0.2}')")"
+    pmax="$p30"; [ "$p7" -gt "$pmax" ] && pmax="$p7"; [ "$p5" -gt "$pmax" ] && pmax="$p5"
+    out_m="${out_m}model:${mid}\t${s30}\t${tope}\t${p30}\t${p7}\t${p5}\n"
+    [ "$mid" = "$WANT_MODEL" ] && pct_want="$pmax"
+    [ "$pmax" -ge 80 ] && [ "$worst" -lt 1 ] && worst=1
+    if [ "$pmax" -ge 100 ]; then
       modelo_topado="${modelo_topado}${modelo_topado:+, }${mid}"
       [ "$worst" -lt 1 ] && worst=1
     fi
-  done <<< "$raw_m"
+  done <<< "$models"
 fi
 
-# --model: el exit code responde por ESE modelo (agotado = 2, aunque el global esté holgado).
+# --model: el exit code responde por ESE modelo (agotado = 2, aunque los demás estén holgados).
 if [ -n "$WANT_MODEL" ] && [ -n "$pct_want" ]; then
   [ "$pct_want" -ge 80 ]  && [ "$worst" -lt 1 ] && worst=1
   [ "$pct_want" -ge 100 ] && worst=2
@@ -163,27 +212,27 @@ fi
 
 case "$MODE" in
   quiet) ;;
-  tsv)   printf "%b" "$out"; printf "%b" "$out_m";;
+  tsv)
+    printf '5h\t%s\t%s\t%s\n7d\t%s\t%s\t%s\n30d\t%s\t%s\t%s\n' \
+      "$g5" "$ref5" "$(pct "$g5" "$ref5")" "$g7" "$ref7" "$(pct "$g7" "$ref7")" "$g30" "$REF" "$(pct "$g30" "$REF")"
+    printf "%b" "$out_m";;
   table)
-    printf "%-32s %10s %8s %6s\n" ventana gastado límite uso
-    printf "%b" "$out" | while IFS=$'\t' read -r v g l p; do
-      [ -n "${v:-}" ] || continue
-      barra=""; n=$(( p / 10 )); [ "$n" -gt 10 ] && n=10
-      i=0; while [ "$i" -lt "$n" ]; do barra="${barra}█"; i=$((i+1)); done
-      printf "%-32s %10s %8s %5s%% %s\n" "$v" "\$$(printf '%.4f' "$g")" "\$$l" "$p" "$barra"
-    done
+    printf "%-32s %10s %8s\n" "agregado (informativo)" gastado "ref*"
+    printf "%-32s %10s %8s\n" 5h  "\$$(printf '%.4f' "$g5")"  "\$$ref5"
+    printf "%-32s %10s %8s\n" 7d  "\$$(printf '%.4f' "$g7")"  "\$$ref7"
+    printf "%-32s %10s %8s\n" 30d "\$$(printf '%.4f' "$g30")" "\$$REF"
+    echo "  * referencia del modelo de \$$REF; ya no es un límite compartido y no mueve el exit code"
     if [ -n "$out_m" ]; then
       echo
-      printf "%-32s %10s %8s %6s\n" "modelo (30d)" gastado tope uso
-      printf "%b" "$out_m" | while IFS=$'\t' read -r v g l p; do
+      printf "%-32s %10s %7s %6s %6s %6s\n" "modelo" "30d gastado" límite "30d" "7d" "5h"
+      printf "%b" "$out_m" | while IFS=$'\t' read -r v g l p30 p7 p5; do
         [ -n "${v:-}" ] || continue
-        if [ "$p" = "?" ]; then
-          printf "%-32s %10s %8s %6s\n" "${v#model:}" "\$$(printf '%.4f' "$g")" "?" "?"
-          continue
-        fi
-        barra=""; n=$(( p / 10 )); [ "$n" -gt 10 ] && n=10
-        i=0; while [ "$i" -lt "$n" ]; do barra="${barra}█"; i=$((i+1)); done
-        printf "%-32s %10s %8s %5s%% %s\n" "${v#model:}" "\$$(printf '%.4f' "$g")" "\$$l" "$p" "$barra"
+        case "$p30" in
+          "?"|"-") printf "%-32s %10s %7s\n" "${v#model:}" "\$$(printf '%.4f' "$g")" "$l"; continue;;
+        esac
+        pm="$p30"; [ "$p7" -gt "$pm" ] && pm="$p7"; [ "$p5" -gt "$pm" ] && pm="$p5"
+        printf "%-32s %10s %7s %5s%% %5s%% %5s%% %s\n" "${v#model:}" "\$$(printf '%.4f' "$g")" \
+          "\$$l" "$p30" "$p7" "$p5" "$(bar "$pm")"
       done
     fi
     echo
@@ -192,15 +241,14 @@ case "$MODE" in
       echo "  Algo se saltó el veto del helper (¿CHEAP_FANOUT_ALLOW_VETOED, u otra herramienta?)."
     fi
     if [ -n "$modelo_topado" ]; then
-      echo "TOPE POR MODELO agotado: ${modelo_topado} — el pozo global puede seguir holgado."
-      echo "  Ese job va a OTRO modelo Go con tope disponible (decisión de calidad: tuya)."
+      echo "LÍMITE AGOTADO: ${modelo_topado} — los demás modelos tienen su propio carril."
+      echo "  Ese job va a OTRO modelo Go con presupuesto (decisión de calidad: tuya)."
     fi
     case "$worst" in
       0) echo "holgado — el ancho puede ir a opencode-go";;
-      1) echo "APRETADO — revisa arriba si lo apretado es una ventana global (manda el ancho a";
-         echo "  opencode/*-free) o solo el tope de un modelo (cambia ESE job de modelo)";;
-      2) echo "AGOTADO — cambiar de modelo Go NO consigue presupuesto: usa opencode/*-free,";
-         echo "  codex o kimi-for-coding/k3";;
+      1) echo "APRETADO — algún modelo está ≥80% en una ventana: cambia ESE job de modelo";;
+      2) echo "AGOTADO — el modelo pedido no tiene presupuesto en alguna ventana: usa otro";
+         echo "  modelo Go, un free sin entrenamiento, codex o kimi-code-plan-cn/k3";;
     esac
     ;;
 esac

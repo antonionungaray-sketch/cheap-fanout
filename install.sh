@@ -41,15 +41,24 @@ echo
 
 echo "Puertas configuradas:"
 if command -v opencode >/dev/null 2>&1; then
-  for p in opencode-go kimi-for-coding; do
-    if opencode models 2>/dev/null | grep -q "^${p}/"; then
-      printf "  ✅ %-16s disponible\n" "$p"
-    else
-      printf "  ➖ %-16s sin credencial (ver README §Requisitos)\n" "$p"
-    fi
-  done
-  if opencode models 2>/dev/null | grep -q -- "-free$"; then
-    printf "  ✅ %-16s disponibles (fallback automático por cuota)\n" "modelos free"
+  models="$(opencode models 2>/dev/null || true)"   # una sola vez: cada llamada tarda ~1-2 s
+  if printf '%s\n' "$models" | grep -q "^opencode-go/"; then
+    printf "  ✅ %-16s disponible\n" "opencode-go"
+  else
+    printf "  ➖ %-16s sin credencial (ver README §Requisitos)\n" "opencode-go"
+  fi
+  # Kimi: opencode >= 1.18.31 renombró el proveedor `kimi-for-coding` a `kimi-code-plan-cn`. Sus
+  # modelos solo aparecen si hay KIMI_API_KEY o una credencial guardada bajo el nombre NUEVO.
+  if printf '%s\n' "$models" | grep -q "^kimi-code-plan-"; then
+    printf "  ✅ %-16s disponible\n" "kimi-code-plan"
+  elif opencode auth list 2>/dev/null | grep -q "kimi-for-coding"; then
+    printf "  ⚠️  %-16s credencial con el nombre VIEJO (kimi-for-coding): exporta KIMI_API_KEY\n" "kimi-code-plan"
+    printf "     o copia esa entrada de auth.json a kimi-code-plan-cn (ver SKILL.md §K3 y Kimi)\n"
+  else
+    printf "  ➖ %-16s sin credencial (ver README §Requisitos)\n" "kimi-code-plan"
+  fi
+  if printf '%s\n' "$models" | grep -q -- "-free$"; then
+    printf "  ✅ %-16s disponibles (OJO: varios entrenan con tus prompts; ver SKILL.md §Modelos gratuitos)\n" "modelos free"
   fi
 fi
 echo

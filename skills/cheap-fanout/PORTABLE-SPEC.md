@@ -2,7 +2,21 @@
 
 > **Un solo archivo, autocontenido.** Cópialo a cualquier computadora con OpenCode CLI (y,
 > opcionalmente, Claude Code) y sigue los pasos. Incluye el helper completo embebido — no
-> necesitas ningún otro archivo. Última verificación de datos: **2026-07-14**.
+> necesitas ningún otro archivo. Última verificación de datos: **2026-07-14** (secciones 3 y 6:
+> 2026-08-28).
+>
+> **⚠ Foto congelada — no es la fuente vigente.** Desde entonces cambió lo siguiente y este
+> documento NO lo refleja; para lo actual usa `SKILL.md` y `bin/` de este repo (releídos el
+> **2026-10-01**): (1) el plan Go ya no tiene pozo global, los límites son **por modelo** (5h = 20%,
+> semana = 50%, mes = 100%); (2) el proveedor de Kimi se renombró de `kimi-for-coding` a
+> `kimi-code-plan-cn` y la ruta `kimi-for-coding/k3` da `UnknownError` en opencode ≥ 1.18.31;
+> (3) el rescate automático por gemelo free quedó **apagado** (esos gemelos entrenan con tus
+> datos; varios murieron); (4) vetos ampliados a `muse-spark-1.3-contributor` y `grok-4.7`;
+> (5) el default del ancho dejó de ser `mimo-v2.5` (deprecado por Xiaomi el 2026-10-21) y pasó a
+> `deepseek-v4.1-flash`; (6) el detector de "database is locked" del helper daba falsos positivos
+> sobre informes largos; (7) en Ubuntu 24.04 el sandbox de codex necesita cargar el perfil AppArmor
+> `bwrap-userns-restrict` (sin él, ni `read-only` puede leer archivos). El helper embebido de abajo
+> es la versión anterior a esas correcciones.
 
 ---
 
