@@ -4,14 +4,13 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). L
 `.claude-plugin/plugin.json`. Para la evidencia detrás de cada cambio, ver los documentos de
 hallazgos en [`Bugs/`](Bugs/).
 
-## [1.3.0] — sin publicar (datos al 2026-10-01)
+## [1.3.0] — 2026-10-01
 
 Evidencia completa: [`Bugs/hallazgos-2026-10-01.md`](Bugs/hallazgos-2026-10-01.md).
 
-> **Estado del release:** cambios hechos y verificados en el árbol de trabajo, versión ya subida a
-> 1.3.0 en `.claude-plugin/plugin.json` y `marketplace.json`; falta el commit. La investigación y
-> los cambios base los hizo Claude Sonnet 5.5; la revisión previa a publicar (abajo, *Revisión
-> antes de publicar*) la hizo Claude Fable 5.1 el mismo día.
+> **Estado del release:** publicado el 2026-10-01 (datos de catálogo, precios y cuotas a esa fecha).
+> La investigación y los cambios base los hizo Claude Sonnet 5.5; la revisión previa a publicar
+> (abajo, *Revisión antes de publicar*) la hizo Claude Fable 5.1 el mismo día.
 
 ### ⚠ Antes de actualizar: cambios de comportamiento
 

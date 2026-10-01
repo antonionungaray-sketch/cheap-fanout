@@ -1,6 +1,6 @@
 # Hallazgos de la actualización 2026-10-01 — catálogo, velocidad y mecánica de cuota
 
-Respaldo del release **1.3.0** (sin publicar). Qué se encontró, con qué evidencia, y qué **no** se
+Respaldo del release **1.3.0** (2026-10-01). Qué se encontró, con qué evidencia, y qué **no** se
 pudo cerrar. Qué cambió en el skill, archivo por archivo, está en [`CHANGELOG.md`](../CHANGELOG.md).
 Ruta fuera del cache de plugins a propósito (sobrevive a `plugin update`).
 
