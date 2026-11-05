@@ -4,14 +4,15 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). L
 `.claude-plugin/plugin.json`. Para la evidencia detrás de cada cambio, ver los documentos de
 hallazgos en [`Bugs/`](Bugs/).
 
-## [1.4.0] — 2026-11-05 (sin publicar)
+## [1.4.0] — 2026-11-05
 
 Evidencia completa: [`Bugs/hallazgos-2026-11-05.md`](Bugs/hallazgos-2026-11-05.md).
 
-> **Estado del release:** cambios hechos en el árbol de trabajo, **sin commit, sin bump de
-> `plugin.json` y sin push**. La investigación, las mediciones y los cambios los hizo Claude Sonnet
-> 5.5; falta la revisión previa a publicar que tuvo el 1.3.0. Datos de catálogo, precios y cuotas al
-> 2026-11-05.
+> **Estado del release:** publicado el 2026-11-05 (datos de catálogo, precios y cuotas a esa fecha).
+> La investigación, las mediciones y los cambios los hizo Claude Sonnet 5.5, y él mismo hizo la
+> revisión de cierre (auditoría automática y pre-revisión barata verificada, ver
+> `Bugs/hallazgos-2026-11-05.md` §11). **No hubo revisión independiente de otro modelo frontier** como
+> la que tuvo el 1.3.0 con Fable 5.1.
 
 ### ⚠ Antes de actualizar: cambios de comportamiento
 
@@ -85,7 +86,7 @@ Evidencia completa: [`Bugs/hallazgos-2026-11-05.md`](Bugs/hallazgos-2026-11-05.m
 - `skills/cheap-fanout-ultimate/SKILL.md`: asientos, sustitutos, privacidad, plazos medidos, troubleshooting, vetados y referencias a Codex/Kimi. `reference/codex.md`: reescrito a 0.166.0.
 - `install.sh`: `--check` ya no marca Kimi directo como "disponible" (la credencial existe, la suscripción está pausada).
 
-### Pendiente de tu decisión (no lo apliqué)
+### Pendiente de decisión (no aplicado)
 
 1. **Habilitar el rescate por cuota en los dos gemelos seguros**: `SAFE_FREE_TWINS="opencode/glm-5.3-flash-free opencode/deepseek-v4.1-flash-free"`
    en `bin/cheap-fanout` (una línea; hay que ajustar el test de la sección 4).

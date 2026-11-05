@@ -1,6 +1,6 @@
 # Hallazgos de la actualización 2026-11-05 — plan Go, índice v5, velocidad y saturación
 
-Respaldo de los cambios de la versión **1.4.0 (sin publicar)**. Qué se encontró, con qué evidencia y
+Respaldo de los cambios de la versión **1.4.0 (2026-11-05)**. Qué se encontró, con qué evidencia y
 qué **no** se pudo cerrar. Qué cambió en el skill, archivo por archivo, está en
 [`CHANGELOG.md`](../CHANGELOG.md).
 
@@ -248,7 +248,7 @@ del CLI). Velocidad sin regresión: `minimax-m3.1-flash` 13/16s, `glm-5.3-flash`
   en el helper. **`iceman-contributor-free` ya quedó vetado** (pedido de Antonio, 2026-11-05): el helper
   lo rechaza en pre-vuelo y `go-budget` lo marca.
 - **Cambios fuera del repo:** el CLI `opencode` local (1.18.35 → 1.19.5, §8) y, con él, su base de datos
-  (se abrió con el esquema de 1.19.5). Todo lo escrito en el repo vive en el árbol de trabajo (sin commit); los
+  (se abrió con el esquema de 1.19.5). Lo escrito en el repo quedó publicado en GitHub en el release 1.4.0; los
   temporales (descargas, salidas de los jobs, scripts de medición) están en el scratchpad de la sesión.
 
 ## 11. Codex 0.166.0, `cheap-fanout-ultimate` y la revisión de cierre (misma jornada)
