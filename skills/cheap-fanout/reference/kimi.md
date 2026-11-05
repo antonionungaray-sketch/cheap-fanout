@@ -1,5 +1,12 @@
 # K3 y Kimi — credencial, plan y velocidades (2026-10-01)
 
+> **PAUSADO (2026-11-05):** Antonio pausó la suscripción directa de Kimi (Allegretto). Las tres rutas
+> `kimi-code-plan-cn/{k3,k3.1-pro,k3.1-pro-highspeed}` responden *"Your current subscription does not
+> have access to Kimi Code right now"*. **No las rutees ni las cuentes como presupuesto**; K3 y K3.1
+> Pro van por Go (`kimi-k3`, `kimi-k3.1-pro`). Lo de abajo se conserva tal cual (medido el
+> 2026-10-01) por si se reactiva; el proveedor ya expone ahí `k3.1-pro` y `k3.1-pro-highspeed`, 1M de
+> contexto.
+
 > Material de referencia del skill `cheap-fanout`, extraído del `SKILL.md` el 2026-10-01 para no
 > cargarlo en cada invocación. Ábrelo cuando `kimi-code-plan-cn/k3` falle o para decidir entre las variantes de Kimi.
 

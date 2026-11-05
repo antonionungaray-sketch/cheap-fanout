@@ -50,7 +50,7 @@ if command -v opencode >/dev/null 2>&1; then
   # Kimi: opencode >= 1.18.31 renombró el proveedor `kimi-for-coding` a `kimi-code-plan-cn`. Sus
   # modelos solo aparecen si hay KIMI_API_KEY o una credencial guardada bajo el nombre NUEVO.
   if printf '%s\n' "$models" | grep -q "^kimi-code-plan-"; then
-    printf "  ✅ %-16s disponible\n" "kimi-code-plan"
+    printf "  ➖ %-16s credencial presente, pero la suscripción directa está PAUSADA (2026-11-05): no se rutea\n" "kimi-code-plan"
   elif opencode auth list 2>/dev/null | grep -q "kimi-for-coding"; then
     printf "  ⚠️  %-16s credencial con el nombre VIEJO (kimi-for-coding): exporta KIMI_API_KEY\n" "kimi-code-plan"
     printf "     o copia esa entrada de auth.json a kimi-code-plan-cn (ver SKILL.md §K3 y Kimi)\n"

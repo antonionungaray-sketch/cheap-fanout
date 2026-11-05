@@ -13,7 +13,7 @@
 #     model       : una de tres formas —
 #                     <id>              → opencode run -m opencode-go/<id>   (plan Go)
 #                     <provider>/<id>   → opencode run -m <provider>/<id>    (tal cual;
-#                                         ej: kimi-code-plan-cn/k3, suscripción Moonshot;
+#                                         ej: opencode/glm-5.3-flash-free (gemelo free de Zen);
 #                                         `kimi-for-coding/*` se traduce solo a ese proveedor)
 #                     codex | codex:<m> → codex exec (suscripción ChatGPT)
 #     prompt_file : ruta a un archivo con el prompt COMPLETO y autocontenido del agente
@@ -94,7 +94,8 @@
 #     menos el entorno. Si el prompt_file excede el límite, el job NO se lanza: falla antes
 #     con 64 y un mensaje claro (en vez del críptico `Argument list too long`, exit 126).
 #   - En jobs codex, out_file trae SOLO el mensaje final; la traza completa va a out_file.log.
-#   - Modelos VETADOS (muse-spark-1.2/1.3-contributor, grok-4.6/4.7 y sus gemelos -free): el lote se
+#   - Modelos VETADOS (muse-spark-1.2/1.3-contributor, iceman-contributor-free, grok-4.6/4.7 y sus
+#     gemelos -free): el lote se
 #     rechaza entero en pre-vuelo con exit 2. Override por invocación: CHEAP_FANOUT_ALLOW_VETOED=1.
 #     La cuota de ChatGPT NO se autodetecta (no tengo la firma de su error verificada).
 #   - Sandbox de codex: read-only por default. Para jobs que escriben, exporta
@@ -165,7 +166,10 @@ esac
 # en los demás y descubrirlo al final). Se puede saltar a propósito, por invocación:
 #   CHEAP_FANOUT_ALLOW_VETOED=1 cheap-fanout jobs.tsv
 #   muse-spark-1.3-contributor : mismo trato de datos que el 1.2 (2026-10-01; confirmado por el usuario).
-VETOED="muse-spark-1.2-contributor muse-spark-1.3-contributor grok-4.6 grok-4.7"
+#   iceman-contributor        : gratis "a cambio de usar tus prompts y respuestas para mejorar el modelo"
+#                               y no es ZDR (2026-11-05; vetado por el usuario). OJO: aquí va SIN el sufijo
+#                               '-free' porque bare_id() lo quita antes de comparar.
+VETOED="muse-spark-1.2-contributor muse-spark-1.3-contributor iceman-contributor grok-4.6 grok-4.7"
 ALLOW_VETOED="${CHEAP_FANOUT_ALLOW_VETOED:-0}"
 
 # id desnudo de un modelo, sea cual sea la puerta: quita el prefijo de proveedor, el 'codex:' y
@@ -230,8 +234,8 @@ if [ -n "$vetados_vistos" ]; then
   echo "cheap-fanout: MODELO VETADO — no se lanzó ningún job del lote." >&2
   printf '%s\n' "$vetados_vistos" >&2
   echo "cheap-fanout: vetados: ${VETOED// /, } (y sus gemelos -free)." >&2
-  echo "cheap-fanout: el ancho va a deepseek-v4.1-flash, glm-5.3-flash o longcat-2.0; lo quirúrgico, a kimi-code-plan-cn/k3," >&2
-  echo "cheap-fanout: qwen3.8-max o glm-5.3. Ver 'Modelos vetados' en el SKILL.md." >&2
+  echo "cheap-fanout: el ancho va a minimax-m3.1-flash, glm-5.3-flash o gpt-6-luna; lo quirúrgico, a codex:gpt-6.1-sol," >&2
+  echo "cheap-fanout: kimi-k3.1-pro o glm-5.3. Ver 'Modelos vetados' en el SKILL.md." >&2
   echo "cheap-fanout: para saltarlo a propósito: CHEAP_FANOUT_ALLOW_VETOED=1" >&2
   exit 2
 fi
@@ -579,11 +583,11 @@ if [ "$sincuota" -gt 0 ]; then
   msg="$msg (${sincuota} sin cuota y sin gemelo free)"
   echo "$msg" >&2
   echo 'cheap-fanout: Go limita por DÓLARES y por MODELO (5h=20%, semana=50%, mes=100% del' >&2
-  echo 'cheap-fanout: límite mensual de cada uno: $60/$30/$15). Corre go-budget:' >&2
+  echo 'cheap-fanout: límite mensual de cada uno: 100/60/30/20/15 USD). Corre go-budget:' >&2
   echo "cheap-fanout:   - cada modelo tiene su propio carril: manda ese job a otro modelo Go" >&2
-  echo "cheap-fanout:   - o a un free que NO entrene (longcat-2.5-preview-free, space-bunny-free)," >&2
-  echo "cheap-fanout:     a 'codex' o a kimi-code-plan-cn/k3. El rescate automático por gemelo" >&2
-  echo "cheap-fanout:     free está apagado: los gemelos de mimo/hy3 entrenan con tus prompts." >&2
+  echo "cheap-fanout:   - o a un free que NO entrene (opencode/glm-5.3-flash-free, opencode/deepseek-v4.1-flash-free," >&2
+  echo "cheap-fanout:     beam-free) o a 'codex'. El rescate automático por gemelo free está apagado" >&2
+  echo "cheap-fanout:     (SAFE_FREE_TWINS vacío; ver 'Modelos gratuitos' en el SKILL.md)." >&2
   exit "$fail"
 fi
 if [ "$vacios" -gt 0 ]; then

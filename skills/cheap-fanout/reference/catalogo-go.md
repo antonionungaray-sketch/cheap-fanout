@@ -1,63 +1,135 @@
-# Catálogo y mediciones del pool Go (releído 2026-10-01)
+# Catálogo y mediciones del pool Go (releído 2026-11-05)
 
-> Material de referencia del skill `cheap-fanout`, extraído del `SKILL.md` el 2026-10-01 para no
-> cargarlo en cada invocación. Ábrelo cuando la tabla de ruteo por caso no cubra un modelo o necesites el número exacto. Fuente de verdad: `opencode.ai/docs/go` (no la confundas con `/docs/zen`). Las cifras caducan.
+> Material de referencia del skill `cheap-fanout`. Ábrelo cuando la tabla de ruteo por caso del
+> `SKILL.md` no cubra un modelo o necesites el número exacto. Fuente de verdad: `opencode.ai/docs/go`
+> (no la confundas con `/docs/zen`, hoy la página *Models* de la consola, que cotiza a pago por uso).
+> Las cifras caducan: el 2026-10-01 → 2026-11-05 cambió casi todo.
 
 ## Catálogo completo del pool Go (cuota → límite → precio → contexto → índice → velocidad)
 
-Cuotas, límites y precios releídos en `opencode.ai/docs/go` el **2026-10-01** (plan Go de 10 USD/mes;
-Go Plus de 40 USD/mes los sube, ver *Cuota Go* en el SKILL.md); contextos de `models.dev/api.json`; `II` de
-Artificial Analysis v4.3.2 (— = AA no lo lista); `seg` medido por mí el 2026-10-01.
+Cuotas, límites y precios de `opencode.ai/docs/go` del **2026-11-05** (plan Go de 10 USD/mes; Go Plus
+de 40 y Go Teams de 20 por miembro los suben, ver *Cuota Go* en el SKILL.md). Contextos del endpoint
+público `https://opencode.ai/inference/go/v1/models`. **II** = Artificial Analysis Intelligence Index
+**v5.0.1**, leído el 2026-11-05 en el HTML del leaderboard; AA publica un valor **por nivel de
+esfuerzo**, así que va como rango (— = AA no lo lista; el índice se reescaló: nada de lo citado antes
+del 2026-11-05 es comparable). **seg** = mediana (mín-máx) de la extracción de ~6K tokens medida por mí
+el 2026-11-05, 5 corridas en dos rondas con 6-9 procesos `opencode` simultáneos (el orden es fiable,
+los absolutos se inflan unos segundos); `t.o.` = venció a los 300s. Todas las corridas exitosas dieron
+84/84 salvo una de `claude-haiku-5-5` (83) y una de `hy3` (78): la extracción no discrimina calidad,
+solo mide tiempo y confirma que ninguno falla.
 
-| id | req/5h | límite USD/mes | USD/1M in/out | ctx | II | seg | Nota |
+| id | req/5h | límite USD/mes | USD/1M in/out | ctx | II (v5.0.1) | seg | Nota |
 |----|-------:|:----------:|---|:--:|:--:|:--:|------|
-| `deepseek-v4.1-flash` | 26,000 | 60 | 0.15/0.60 · peak 0.30/1.20 | 1M | 39 | 17 | **DEFAULT del ancho.** Texto+imagen, 552B MoE, MIT. Caché 0.003. **Su ZDR está pactado solo hasta el 2026-10-31** (renovación mensual) |
-| `glm-5.3-flash` | 6,320 | 60 | 0.15/0.50 | 1M | 42 | 17.5 | "Ox Alpha", 320B/18B, MIT; texto+imagen+video+PDF. Límite subió de 15 a 60. Unidad difícil **y** segundo caballo |
-| `mimo-v2.6-flash` | 30,100 | 60 | 0.14/0.28 | 1M | 38 | 65 | Omni (audio). El más barato por token y de los más lentos. Sustituye a 2.5 |
-| `mimo-v2.5` | 30,100 | 60 | 0.14/0.28 | 1M | — | 50 | **Xiaomi lo deprecó para el 2026-10-21.** Ex-default: migra |
-| `longcat-2.0` | 11,400 | 60 | 0.30/1.20 | 1M | 19 | 30 | II más bajo del pool útil. Caché 0.006 |
-| `deepseek-v4-flash` | 13,000 | 30 | 0.15/0.60 · peak 0.30/1.20 | 1M | 34 | 15 | DeepSeek lo retiró: "rutea a V4.1-Flash". Redundante; el mismo modelo con la mitad de límite |
-| `qwen3.8-flash` | 5,400 | 30 | 0.15/0.47 | 1M | ~40* | 60 | *AA solo lista "Qwen3.8-Flash-Next" (II 40, 180B): no está confirmado que sea este id |
-| `gpt-6-luna` | 4,230 | 15 | 0.10/0.50 · >272K 0.20/0.75 | 1.05M | 37 | 16.5 | **Nuevo.** Retiene datos 30 días. Mismo modelo en Codex: 350-3,000 mensajes/5h |
-| `hy3` | 4,300 | 60 | 0.14/0.58 | 256K | 25 | 26 | Dominado por `deepseek-v4.1-flash`; sin recargo peak |
-| `qwen3.7-plus` | 4,300 | 60 | 0.40/1.60 · >256K 1.20/4.80 | 1M | — | — | Tool-calling+MCP |
-| `deepseek-v4-flash-vision-exp` | 6,500 | 15 | 0.15/0.60 · peak 0.30/1.20 | 1M | — | — | DeepSeek lo retiró; V4.1-Flash ya acepta imagen |
-| `gpt-5.6-luna` | 2,050 | 15 | 0.20/1.20 · >272K 0.40/1.80 | 1.05M | 37 | — | Superado por `gpt-6-luna`: mismo II, la mitad de precio, el doble de cuota |
-| `mimo-v2.6-pro` | 3,250 | 15 | 0.435/0.87 | 1M | 46 | 147 | II más alto entre abiertos (AA). 1.02T/42B. **Lento** |
-| `mimo-v2.5-pro` | 3,250 | 15 | 0.435/0.87 | 1M | — | — | **Deprecado 2026-10-21** |
-| `minimax-m3` | 3,200 | 60 | 0.30/1.20 | 1M | 29 | 55 | ~428B/23B; vía `/v1/messages` |
-| `minimax-m2.7` | 3,400 | 60 | 0.30/1.20 | 200K | — | — | Gen previa de M3 |
-| `kimi-k2.7-code` | 1,350 | 60 | 0.95/4.00 | 256K | — | — | Coding agentic multi-paso |
-| `kimi-k2.6` | 1,150 | 60 | 0.95/4.00 | 256K | — | — | Gen previa de k2.7 |
-| `hy4-preview` | 1,350 | 30 | 0.834/2.501 | 1M | — | 104-983 | **Ya responde**, pero la latencia es errática (dos extracciones: 104s y 983s). No lo rutees |
-| `glm-5.3` | 220 | 15 | 1.40/4.40 | 1M | 45 | — | Mismo base que 5.2, todo el avance es post-training. Licencia propia, no MIT |
-| `glm-5.2` | 880 | 60 | 1.40/4.40 | 1M | — | — | Z.ai lo enruta a 5.3. Sin razón para elegirlo |
-| `deepseek-v4-pro` | 1,050 | 15 | 0.66/1.98 · peak 1.32/3.96 | 1M | 36 | — | DeepSeek lo "está retirando" (sus propias páginas se contradicen). V4.1-Flash lo supera |
-| `qwen3.8-max` | 160 | 15 | 2.00/6.00 | 1M | 45 | — | 2.4T/95B abierto. Quirúrgico |
-| `kimi-k3` | 110 | 15 | 3.00/15.00 | 1M | 44 | 31.5 | 2.8T/104B. 34 tokens/s (AA). **Preferir la puerta `kimi-code-plan-cn/k3`** si importa no gastar Go; es la más lenta (43.5s) |
-| ~~`grok-4.7`~~ | 169 | 15 | 2.00/6.00 | 500K | 46 | 67.5 | 🚫 **Fuera del ruteo** — TTFT 30-79s (AA, varía) y retiene 30 días. Ver *Modelos vetados* en el SKILL.md |
-| ~~`grok-4.6`~~ | 169 | 15 | 2.00/6.00 | 500K | 44 | 52 | 🚫 **VETADO** |
-| ~~`muse-spark-1.3-contributor`~~ · ~~`muse-spark-1.2-contributor`~~ | 45,300 | 60 | 0.10/0.20 | 1M | 48 | — | 🚫 **VETADOS** — entrenan con tus datos y no son ZDR |
-| `longcat-2.5-preview-free` | ilimitado | libre | gratis | 1M | — | 55 | Gratis "limited time". Ver *Modelos gratuitos* en el SKILL.md |
-| `space-bunny-free` | ilimitado | libre | gratis | 1M | — | 22 | Gratis "limited time", modelo "stealth". Ver *Modelos gratuitos* en el SKILL.md |
+| `minimax-m3.1-flash` | 3,880 | 20 | 0.15/0.60 | 1M | 29 | 13 (10-21) | **DEFAULT del ancho.** Nuevo (2026-10-19). Texto+imagen+video, salida hasta 512K. Pre-revisor por default |
+| `glm-5.3-flash` | 6,320 | 60 | 0.15/0.50 | 1M | 28 | 20 (17-25) | Segundo caballo; ya no es la "unidad difícil" (II 28 en v5). Texto+imagen+video. Dio falsos OK como pre-revisor |
+| `gpt-6-luna` | 4,230 | 15 | 0.10/0.50 | 1.1M | 21-28 | 17 (15-18) | Pre-revisor rápido (86s). Retiene 30 días. PDF. Mismo modelo en Codex |
+| `claude-haiku-5-5` | 3,850 | 15 | 0.10/0.50 | 1M | 25-36 | 18 (16-20) | **Nuevo.** Unidad difícil por default. PDF+imagen, 1M ctx. Retiene 30 días (Anthropic). 0.10/0.50 hasta 100K, 0.50/2.50 después |
+| `deepseek-v4.1-flash` | 43,330 | 100 | 0.15/0.60 | 1M | 29-33 | 21-25 / 117-122 / t.o. | **Saturado el 2026-11-05** (bimodal; ver SKILL.md). Texto+imagen. Caché 0.003. Límite subió de 60 a 100 el 2026-10-30. ZDR pactado hasta 2026-11-30 |
+| `kimi-k3` | 110 | 15 | 3.00/15.00 | 1M | — | 22 (15-24) | Segundo pre-revisor de lotes de alto impacto (196s). 110 req/5h. AA v5 ya no lo lista |
+| `beam-free` | ilimitado | libre | gratis | 1M | 18 | 25 (16-28) | **Nuevo.** Gratis, no entrena, retiene 30 días; no disponible en varios países (México no está) |
+| `qwen3.8-flash` | 5,400 | 30 | 0.15/0.47 | 1M | — | 28 (23-30) | 27s estables. AA no lo lista (solo "Qwen3.8-Flash-Next") |
+| `glm-5.3` | 220 | 15 | 1.40/4.40 | 1M | 23-32 | 26 (23-30) | Unidad difícil con material sensible (0 días); 220 req/5h |
+| `gpt-5.6-luna` | 2,050 | 15 | 0.20/1.20 | 1.1M | — | 15 (14-16) | Superado por `gpt-6-luna` (mismo precio por token ×2, la mitad de cuota) |
+| `glm-5.2` | 880 | 60 | 1.40/4.40 | 1M | — | 32 (22-41) | Z.ai lo enruta a 5.3; sin razón para elegirlo |
+| `hy3` | 4,300 | 60 | 0.14/0.58 | 256K | — | 32 (31-32) | Dominado. 256K de contexto; una corrida con 78/84 |
+| `kimi-k3.1-pro` | 147 | 15 | 2.00/10.00 | 1M | 46 | 35 (30-38) | **Nuevo** (2026-10-23). II más alto entre abiertos. Lento: venció a los 8 min como pre-revisor |
+| `hy4` | 2,710 | 60 | 0.834/2.501 | 1M | 35 | 48 (46-51) | **Nuevo** (2026-11-04). Texto+imagen. Lento (46-51s). Sin dato de costo en AA |
+| `kimi-k2.7-code` | 1,350 | 60 | 0.95/4.00 | 262K | — | 42 (40-45) | 42s; sin índice |
+| `qwen3.7-plus` | 4,300 | 60 | 0.40/1.60 | 1M | — | 41 (40-42) | 41s; sin índice |
+| `mimo-v2.6-flash` | 30,100 | 60 | 0.14/0.28 | 1M | 27 | 46 (32-61) | El más barato por token (0.14/0.28); 3x más lento. Omni (audio) |
+| `mimo-v2.6-pro` | 3,250 | 15 | 0.435/0.87 | 1M | 30 | 50 (34-66) | Bajó de II 46 a 30 en v5. Lento (34-66s). Omni (audio) |
+| `longcat-2.0` | 11,400 | 60 | 0.30/1.20 | 1M | — | 51 (50-52) | Lento (50-52s). Ver discrepancia LongCat en SKILL.md |
+| `minimax-m3` | 3,200 | 60 | 0.30/1.20 | 1M | 19 | 38 (14-63) | Vía `/v1/messages`. Errático (14-63s) |
+| `deepseek-v4-pro` | 1,050 | 15 | 0.66/1.98 | 1M | 23 | 41 | II 23 (v5). Sale del ruteo |
+| `step-5-preview` | 430 | 15 | 1.00/2.70 | 1M | 29 | — | **Nuevo.** Flaky: las dos corridas fallaron (una leyó una ruta inventada; otra dio "Endpoint is unavailable") |
+| `hy4-preview` | 1,350 | 30 | 0.834/2.501 | 1M | — | 86 (39-133) | Errático: 39-133s. No lo rutees |
+| `qwen3.8-max` | 160 | 15 | 2.00/6.00 | 1M | 34 | 59 (47-71) | Quirúrgico; 59s |
+| `gemini-4-argon` | 440 | 30 | 2.00/10.00 | 1M | 50 | 68 (44-75) | **Nuevo.** Casi-frontier en Go: audio+video+imagen+PDF. 0 días de retención. **50% de descuento hasta 2026-11-30** (lista 4/20) |
+| ~~`mimo-v2.5`~~ | 30,100 | 60 | 0.14/0.28 | — | — | — | 💀 `has been deprecated. Use mimo-v2.6-flash instead` — la doc aún lo lista |
+| ~~`mimo-v2.5-pro`~~ | 3,250 | 15 | 0.435/0.87 | — | — | — | 💀 `has been deprecated. Use mimo-v2.6-pro instead` — la doc aún lo lista |
+| ~~`iceman-contributor-free`~~ | ilimitado | libre | gratis | 262K | — | — | 🚫 **VETADO** (2026-11-05): ENTRENA con tus prompts (no ZDR); además el workspace lo bloquea |
+| ~~`grok-4.7`~~ | 169 | 15 | 2.00/6.00 | 500K | 31-35 | — | 🚫 **VETADO** (ver SKILL.md). Retiene 30 días |
+| ~~`muse-spark-1.3-contributor`~~ | 45,300 | 60 | 0.10/0.20 | 1M | — | — | 🚫 **VETADO** — entrena con tus datos |
+| ~~`muse-spark-1.2-contributor`~~ | 45,300 | 60 | 0.10/0.20 | 1M | — | — | 🚫 **VETADO** — entrena con tus datos |
 
 **Notas del catálogo:**
-- Salieron de la doc de Go desde el 2026-08-28: `glm-5.1`, `minimax-m2.5`, `qwen3.7-max`,
-  `qwen3.6-plus` y `grok-4.5`. No los rutees.
-- **`opencode models` sigue siendo una lista desfasada** que no es la autoridad. El 2026-10-01
-  listaba bien casi todo, pero la única prueba real de que un modelo existe es
-  `opencode run -m <ruta> "Responde exactamente: PONG"`; así se probaron los 17 modelos Go nuevos
-  o dudosos de hoy.
-- Faltan en AA: `mimo-v2.5`, `hy4-preview`, `longcat-2.5-preview`, `kimi-k2.7-code`, `glm-5.2`,
-  `qwen3.7-plus`. Que no tengan índice no los descalifica, solo no se pueden comparar.
+- **Salieron de la doc o responden error hoy** (PONG del 2026-11-05): `deepseek-v4-flash` y
+  `deepseek-v4-flash-vision-exp` (`UnknownError`; Zen marca `V4 Flash` deprecado el 2026-10-26),
+  `kimi-k2.6`, `minimax-m2.7`, `longcat-2.5-preview-free`, `space-bunny-free`, `step-5-preview-free`
+  (`UnknownError`; models.dev aún los lista, el endpoint no). `mimo-v2.5` y `mimo-v2.5-pro`: error
+  duro por deprecación aunque la tabla de la doc los conserva. Desde el 2026-08-28 ya no estaban:
+  `glm-5.1`, `minimax-m2.5`, `qwen3.7-max`, `qwen3.6-plus`, `grok-4.5`.
+- **El endpoint `/inference/go/v1/models` sirve 29 modelos**; la doc lista 31: la diferencia son los
+  dos `mimo-v2.5*` deprecados. Es la lista autoritativa de lo servible; `models.dev` trae 38 ids con
+  restos (`cat-jam-free`, `gemini-4-argon-contributor`, `minimax-m3.1-flash-free`, `space-bunny`,
+  `step-5-preview-free`) y `opencode models` la mezcla.
+- Kimi directo (`kimi-code-plan-cn/*`): las tres rutas responden *"Your current subscription does not
+  have access to Kimi Code right now"* (suscripción pausada por Antonio). Dato de contexto del
+  proveedor: `k3.1-pro` y `k3.1-pro-highspeed` ya existen ahí, 1M de contexto.
+- Faltan en AA v5: `kimi-k3`, `longcat-2.0`, `glm-5.2`, `hy3`, `hy4-preview`, `kimi-k2.7-code`,
+  `qwen3.7-plus`, `qwen3.8-flash`, `mimo-v2.5*`. Que no tengan índice no los descalifica.
+- Modalidades según el endpoint: PDF ("application") solo `gpt-6-luna`, `gpt-5.6-luna`,
+  `claude-haiku-5-5`, `gemini-4-argon` y los `muse-spark`; audio solo `gemini-4-argon`, `mimo-v2.6-*`
+  y `muse-spark`. `glm-5.3-flash` **ya no lista PDF** (antes el skill decía texto+imagen+video+PDF).
 
-> **Precio ≠ cuota ≠ límite ≠ velocidad.** Son cuatro cosas. El ancho va a los de cuota alta
-> **con límite 60** y buena velocidad (`deepseek-v4.1-flash`, `glm-5.3-flash`); los de <400 req/5h
-> (`glm-5.3`, `qwen3.8-max`, `kimi-k3`) son 1-2 unidades quirúrgicas por sesión, nunca el ancho.
+> **Precio ≠ cuota ≠ límite ≠ velocidad.** Son cuatro cosas. El ancho va a los de cuota alta y buena
+> velocidad (`minimax-m3.1-flash`, `glm-5.3-flash`, `gpt-6-luna`, y `deepseek-v4.1-flash` cuando no
+> está saturado); los de <500 req/5h (`glm-5.3`, `qwen3.8-max`, `kimi-k3`, `kimi-k3.1-pro`,
+> `gemini-4-argon`) son 1-2 unidades quirúrgicas por sesión, nunca el ancho.
 
-## Qué pre-revisa el lote — comparación medida el 2026-10-01
+## `deepseek-v4.1-flash` el 2026-11-05: latencia bimodal y saturación
 
-K3 dejó de ser el subteniente por default: sobre las **mismas 19 unidades** (por referencia) los
+La extracción de 6K tokens (la misma que el 2026-10-01 hacía en 17s), 7 corridas de las rondas 1-2: **21, 24, 25s**
+(las rápidas) y **117s, 122s**, un **timeout a los 300s** con salida vacía y una corrida que maté a
+los 3 min sin respuesta. En la prueba web (leer `docs/go` con `webfetch` y devolver JSON con citas):
+una corrida de **216s** correcta (9/9) y otra que murió con
+`Upstream request failed: [prefill_cap_refused] the cell is at capacity; retry shortly (after 5 s)`.
+En la pre-revisión de 5 unidades respondió bien en 134s. **Repetición ~1 h después** (21:33-21:39
+UTC, el modelo solo, 3 extracciones): `Error: Upstream request failed: [overloaded] the server is
+overloaded; retry shortly` a los 17s, una corrida correcta de **70s** y un **timeout a los 300s**.
+Total: 8 de 13 corridas de ≥117s, vencidas o fallidas (solo 3 respondieron en ≤25s), con el PONG sano
+(11-17s), fuera de las horas peak (20:45-21:40 UTC, jueves) y con otros modelos sanos al mismo
+tiempo ⇒ saturación del proveedor, no del equipo. Un PONG por el helper con opencode ya en 1.19.5
+(más de una hora después) también dio `[overloaded]`: no es cosa de la versión del CLI. Un job `124` en
+el helper puede ser esto.
+**Re-mide** antes de devolverle el puesto de caballo del ancho.
+
+## Pre-revisión — lote de 5 unidades, medido el 2026-11-05
+
+Unidades reales de esta actualización, por referencia, 7 pre-revisores en paralelo (plantilla del
+SKILL.md con (e) "¿truncada?" añadido). Fallas del lote, conocidas o verificadas por mí:
+**U01** (`deepseek-v4.1-flash`, changelog) truncada por timeout con solo trazas; **U02** (`glm-5.3-flash`)
+con 3 citas reales atribuidas a la versión equivocada (`v2.2.1` en vez de `v2.2.3`, `v2.1.0` por
+`v2.2.0`, `v1.19.2` por `v2.1.3`) y un bullet corrupto (`no hay这笔`); **U04** (réplica B de la
+extracción de la doc de Zen) omitía los ids exactos de modelo que su prompt exigía, sin declararlo.
+
+| Pre-revisor | Tiempo | Formato | U01 | U02 | U04 (ids omitidos) |
+|---|--:|:--:|:--:|:--:|:--:|
+| `gpt-6-luna` | **86s** | ✅ | FALLO ✅ | FALLO (exagerado, ✅) | DUDOSO ✅ |
+| `deepseek-v4.1-flash` | 134s | ✅ | FALLO ✅ | DUDOSO ✅ | DUDOSO ✅ |
+| `minimax-m3.1-flash` | **163s** | ✅ | FALLO ✅ | DUDOSO ✅ (3 errores + bullet corrupto) | DUDOSO ✅ |
+| `kimi-k3` (Go) | 196s | ✅ | FALLO ✅ | DUDOSO ✅ (2 errores) | DUDOSO ✅ |
+| `claude-haiku-5-5` | 203s | ✅ | FALLO ✅ | DUDOSO ✅ (3 errores) | **OK ❌** |
+| `glm-5.3-flash` | 215s | ✅ | FALLO ✅ | **OK ❌** | **OK ❌** |
+| `kimi-k3.1-pro` | venció a 480s | sin veredicto | — | — | — |
+
+`minimax-m3.1-flash` fue el más exhaustivo (verificó una por una las 100 filas de precios y 165 pares
+nombre→id contra la fuente y encontró los tres errores de versión y el bullet corrupto); `gpt-6-luna`
+el más rápido pero menos profundo (4 KB de salida; marcó U05 como DUDOSO por omitir condiciones del
+campo `cost`, hallazgo menor). **Es un lote chico:** evidencia delgada. Repite con otro antes de
+depender de ello.
+
+## Prueba web con cita (2026-11-05)
+
+Leer `https://opencode.ai/docs/go` con `webfetch` y devolver un JSON con 9 valores (límites, precios,
+fechas) más su cita: `minimax-m3.1-flash` 27s/11s, `claude-haiku-5-5` 18s/19s, `glm-5.3-flash` 22s/22s,
+`gpt-6-luna` 28s/22s (todas 9/9 con las fechas del 30 de noviembre de 2026 correctas;
+`claude-haiku-5-5` devolvió solo 3 citas en una de las dos corridas, los demás 14) y
+`deepseek-v4.1-flash` 216s correcta / falla de capacidad.
+
+### Primer lote — 19 unidades, medido el 2026-10-01
+
+K3 dejó de ser el subteniente por default ese día: sobre las **mismas 19 unidades** (por referencia) los
 candidatos tardaron:
 
 "Problemas reales" del lote, verificados por mí: **U04** (una réplica se contradice con su propia
@@ -77,7 +149,7 @@ dato vivo y su TTFT se movió entre capturas (Grok 4.7 xhigh: 78.69s → 42.40s 
 | `glm-5.3` | 802s | **15/19** (no separó réplicas) | — / ✅ / — |
 | `mimo-v2.6-pro` | 1,009s (17 min) | 19/19 | ❌ / ❌ / ✅ |
 
-## Las dos señales de que K3 está lento (2026-10-01)
+## Historia: las dos señales de que K3 estaba lento (2026-10-01)
 
 - **AA lo mide en 34 tokens/s** y 79s por respuesta del Index; `glm-5.3-flash` 45 t/s y 59s,
   `deepseek-v4.1-flash` 209 t/s y 13s. Su TTFT (4.5s) está bien: lo lento es producir.

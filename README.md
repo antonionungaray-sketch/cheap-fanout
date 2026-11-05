@@ -64,7 +64,7 @@ quieres editar los skills en su repo y verlos en vivo, sin pasar por el ciclo de
 | [OpenCode CLI](https://opencode.ai) ≥ 1.18 + plan **Go** | los agentes baratos | sí |
 | `bash` + `timeout` (coreutils) | el dispatcher y sus plazos | sí |
 | [Codex CLI](https://github.com/openai/codex) + login ChatGPT | jobs `codex`: un segundo presupuesto | no |
-| Suscripción **Kimi For Coding** | K3 como segundo pre-revisor del lote (el primero es un modelo rápido de Go) | no |
+| Suscripción **Kimi For Coding** | **pausada en la máquina del autor desde 2026-11-05**: ya no se usa; K3 va por Go (`kimi-k3`) | no |
 
 Las credenciales de opencode viven en `~/.local/share/opencode/auth.json`, una entrada por
 proveedor (`opencode-go`, `kimi-code-plan-cn`, …; el de Kimi se llamaba `kimi-for-coding` hasta opencode
@@ -80,8 +80,8 @@ Un `jobs.tsv` separado por TABs, un job por línea:
 ```
 
 ```
-deepseek-v4.1-flash	p01.md	o01.out	2m
-kimi-code-plan-cn/k3	p02.md	o02.out	8m
+minimax-m3.1-flash	p01.md	o01.out	2m
+kimi-k3	p02.md	o02.out	8m
 codex:gpt-6-luna	p03.md	o03.out	4m
 ```
 
@@ -93,7 +93,7 @@ El campo del modelo elige la **puerta**, y cada puerta es un presupuesto indepen
 
 | Forma | Corre por | Presupuesto |
 |---|---|---|
-| `deepseek-v4.1-flash` | `opencode run -m opencode-go/<id>` | plan Go |
+| `minimax-m3.1-flash` | `opencode run -m opencode-go/<id>` | plan Go |
 | `opencode/<id>-free` | `opencode run` | gratis |
 | `<provider>/<id>` | `opencode run -m <ruta>` tal cual | el de ese proveedor |
 | `codex` / `codex:<m>` | `codex exec` | suscripción ChatGPT |
@@ -108,13 +108,15 @@ Al vencer manda SIGTERM y, 15s después, SIGKILL; el `.status` queda en 124 y el
 Sin esto, un agente colgado bloquea el `wait` final para siempre.
 
 **La cuota se mide por modelo y el dispatcher no decide por ti.** Desde 2026-10-01 el plan Go
-limita por **dólares y por modelo**: cada uno trae un límite mensual (60, 30 o 15 USD en el plan
+limita por **dólares y por modelo**: cada uno trae un límite mensual (100, 60, 30, 20 o 15 USD en el plan
 Go de 10 USD) del que salen sus ventanas de 5 horas (20%), semana (50%) y mes (100%); la doc ya no
 menciona un pozo global. Agotar un modelo no agota a los demás. Al detectar el error de cuota, el
 dispatcher **no** sustituye el modelo —es una decisión de calidad y es del orquestador— y deja
-`.status=77`. Su rescate automático en el gemelo `opencode/<id>-free` está **apagado**: la doc de
-Zen avisa que esos gemelos "may use collected data to improve the model", el mismo motivo por el
-que `muse-spark` está vetado (`CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1` lo reactiva para material
+`.status=77`. Su rescate automático en el gemelo `opencode/<id>-free` está **apagado**: cuando se decidió, la
+doc de Zen avisaba que esos gemelos "may use collected data to improve the model", el mismo motivo
+por el que `muse-spark` está vetado. Desde 2026-11-05 `glm-5.3-flash-free` y
+`deepseek-v4.1-flash-free` ya no entrenan; habilitarlos en el helper queda pendiente de confirmación
+(`CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1` reactiva el rescate para cualquier gemelo, solo con material
 público).
 
 **La carrera de arranque de SQLite no te alcanza.** Varios `opencode` arrancando a la vez contra
@@ -147,7 +149,7 @@ de 40 USD).
 
 ## El invariante
 
-Ningún output barato aterriza sin revisión. Los agentes baratos y el subteniente (un modelo rápido; K3 como segundo revisor) producen
+Ningún output barato aterriza sin revisión. Los agentes baratos y el subteniente (un modelo rápido de Go; otro de familia distinta como segundo revisor) producen
 **materia prima**, no la respuesta: el orquestador hace spot-check contra fuente primaria, escribe
 la síntesis final y, en código, lee el diff y corre los tests. El skill documenta las lecciones
 caras que sostienen esa regla — entre ellas que la `confidence` auto-reportada de un agente no es
@@ -155,10 +157,10 @@ señal, y que el conocimiento de entrenamiento del propio orquestador caduca.
 
 ## Estado
 
-Uso personal, verificado sobre Linux (Ubuntu 24.04) con OpenCode 1.18.31 y codex-cli 0.159.3. Los
-precios, límites e índices citados en los SKILL.md se releyeron en la fuente el **2026-10-01** y
-**caducan** —entre el 2026-08-28 y esa fecha cambió la mecánica entera del plan—: la fuente de
-verdad es `opencode.ai/docs/go`. Ojo con no confundirla con `opencode.ai/docs/zen`, que cotiza los
+Uso personal, verificado sobre Linux (Ubuntu 24.04) con OpenCode 1.19.5 y codex-cli 0.166.0 (no
+validado en OpenCode 2.x). Los precios, límites e índices citados en los SKILL.md se releyeron en la
+fuente el **2026-11-05** y **caducan** —cambiaron casi por completo entre el 2026-10-01 y esa fecha, y
+antes entre el 2026-08-28 y el 2026-10-01—: la fuente de verdad es `opencode.ai/docs/go`. Ojo con no confundirla con `opencode.ai/docs/zen`, que cotiza los
 mismos modelos a otro precio porque es pago-por-uso.
 
 Qué cambió y con qué evidencia: [`CHANGELOG.md`](CHANGELOG.md) y

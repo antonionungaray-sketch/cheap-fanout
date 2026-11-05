@@ -6,27 +6,31 @@
 `codex exec` corre **no-interactivo con el login de ChatGPT** (sin API key). En `jobs.tsv` usa
 `codex` (modelo default) o `codex:<model>`; el helper lo lanza como
 `codex exec --skip-git-repo-check --ephemeral -s read-only -o out_file` (y `-C <dir>` si pasaste
-`--dir`). Releído el **2026-10-01**: la estable es **0.159.3** (2026-09-30) y **es la que quedó
-instalada aquí ese día** (`npm install -g @openai/codex@0.159.3` bajo nvm, en espacio de usuario, sin
-sudo; antes: 0.157.1).
+`--dir`). Releído el **2026-11-05**: la estable es **0.166.0** y **es la que ya estaba instalada aquí**
+cuando lo revisé (npm global bajo nvm; el symlink es del 2026-11-05 14:50 hora local; no la instalé yo;
+antes: 0.159.3 desde el 2026-10-01). Entre 0.159.3 y 0.166.0 el changelog no trae rupturas para
+`codex exec` (los flags `-m`, `-s`, `-C`, `--skip-git-repo-check`, `--ephemeral` y `-o` siguen en
+`--help`). Sí trae: `gpt-6.1-sol` es el default del catálogo incluido (0.161.0), `gpt-6.1-terra`
+entró a los catálogos (0.165.0), el sandbox de Linux arranca mejor con varios archivos denegados
+(0.162.0) y los reintentos respetan el `Retry-After` del servidor (0.161.0).
 
-- **Modelos disponibles con login ChatGPT** (`developers.openai.com/codex/models`, 2026-10-01):
-  `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`. **GPT-5.5 se retira de Codex el
-  2026-10-14** en todos los planes; GPT-5.4 y 5.3-Codex-Spark ya se retiraron. Con
-  `0.157.1` respondieron PONG `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-luna` y el oculto
-  `gpt-reserve` (3-4s los que cronometré), pero **`gpt-6.1-sol` falló** con *"not supported when
-  using Codex with a ChatGPT account"* y *"Model metadata … not found"*: el modelo entró al
-  catálogo en la 0.159.1. **Tras actualizar a 0.159.3, `codex:gpt-6.1-sol` y el `codex` default
-  responden PONG por el helper** (verificado 2026-10-01).
-- **El modelo default de `codex` sale de `~/.codex/config.toml`**, hoy `gpt-6-astra` con
-  `model_reasoning_effort = "xhigh"` (antes `gpt-5.5`). Es el más caro de la cuota: **5-45
-  mensajes/5h en Plus** contra 15-160 de `gpt-6.1-sol`, 15-150 de `gpt-6-sol` y 350-3,000 de
-  `gpt-6-luna` (estimaciones de OpenAI para Plus/Business Standard; Pro no tiene límite de 5h).
-  Pide el modelo explícito en el job: `codex:gpt-6.1-sol`, `codex:gpt-6-luna`.
-- **Calidad (AA v4.3.2):** `gpt-6-astra` 53 · `gpt-6.1-sol` 52 · `gpt-6-sol` 48 · `gpt-6-luna` 37;
-  Coding Agent Index en Codex: astra 62, sol 57, luna 41. OpenAI dice que 6.1 Sol "casi iguala a
-  Astra en coding agentic a un quinto del precio" y AA lo confirma (52 vs 53). Es la opción
-  casi-frontier que **no gasta tokens de Anthropic ni cuota Go**.
+- **Modelos disponibles con login ChatGPT** (`developers.openai.com/codex/models`, 2026-11-05):
+  `gpt-6-astra`, `gpt-6.1-sol` (contexto por defecto de 500K), `gpt-6.1-terra` (**nuevo**: exige
+  Codex ≥ 0.159.0; "rápido y eficiente para escritura, visión y uso de computadora") y `gpt-6-luna`.
+  `gpt-6-sol` ya no aparece entre los recomendados aunque la tabla de límites aún lo lista.
+  **Retirados:** GPT-5.5 (2026-10-14), GPT-5.3-Codex-Spark (2026-09-14) y GPT-5.4 (2026-08-31).
+  Historia: con 0.157.1 `gpt-6.1-sol` fallaba con *"not supported when using Codex with a ChatGPT
+  account"* y *"Model metadata … not found"* porque entró al catálogo en la 0.159.1.
+- **El modelo default de `codex` sale de `~/.codex/config.toml`**, hoy **`gpt-6-luna` con
+  `model_reasoning_effort = "high"`** (el 2026-10-01 era `gpt-6-astra` con `xhigh`; alguien lo
+  cambió). Un job `codex` pelado usa entonces Luna, el más barato de la cuota. Cuotas en Plus
+  (mensajes por 5h, estimaciones de OpenAI del 2026-11-05; Pro no tiene límite de 5h y pueden aplicar
+  límites semanales): Astra **5-45**, 6.1 Sol **15-160**, 6.1 Terra **35-285**, 6 Sol 15-150, Luna
+  **350-3,000**. Pide el modelo explícito en el job: `codex:gpt-6.1-sol`, `codex:gpt-6-luna`.
+- **Calidad (AA v5.0.1, por esfuerzo, de high a max):** `gpt-6-astra` 55-57 · `gpt-6.1-sol` 50-55
+  (xhigh 52) · `gpt-6.1-terra` 42-51 · `gpt-6-luna` 21-28. El Coding Agent Index en Codex de la v4.3.2
+  (astra 62, sol 57, luna 41) no se releyó. OpenAI dice que 6.1 Sol "casi iguala a Astra" a menor
+  costo. Es la opción casi-frontier que **no gasta tokens de Anthropic ni cuota Go**.
 - **Para qué:** el asiento casi-frontier (`gpt-6.1-sol`), y código/mecánico cuando la cuota Go
   escasea (`gpt-6-luna`). `gpt-6-luna` también está EN el pool Go (4,230 req/5h, límite 15): codex
   no suma un modelo, suma **cuota** aparte.
@@ -59,6 +63,11 @@ sudo; antes: 0.157.1).
     juzga si lo escrito es correcto).
   - `danger-full-access` ya no hace falta. Queda solo como último recurso en una máquina Ubuntu
     24.04 **sin** ese perfil (y entonces, solo en un directorio aislado: sin barrera de filesystem).
+- **Reverificado el 2026-11-05 con 0.166.0:** `bwrap --unshare-all --ro-bind / / true` da OK (el
+  perfil de AppArmor sigue cargado) y `codex:gpt-6-luna`, `codex:gpt-6.1-sol` y `codex:gpt-6.1-terra`
+  leyeron por el helper, en `read-only`, el archivo de ~6K tokens y devolvieron los 84 valores bien:
+  **84/84 en 20-24s** (Luna 23-24s, Sol 21-22s, Terra 20s). Como asiento del consejo (prompt-only):
+  Sol 60s y Terra 23s; ver `cheap-fanout-ultimate`.
 - **Luna por dos puertas:** `gpt-6-luna` → `opencode run` → cuota **Go**; `codex:gpt-6-luna` →
   `codex exec` → cuota **ChatGPT**. Mismo modelo, presupuestos independientes; un mismo lote puede
   mezclar ambas. Regla: el ancho con Luna va por **Go**; `codex` es desborde. Reintento típico:

@@ -64,6 +64,7 @@ check_vetoed() { # <modelo>
   else bad "NO se vetó $1 (exit $rc)"; fi
 }
 for m in muse-spark-1.2-contributor muse-spark-1.3-contributor grok-4.6 grok-4.7 \
+         iceman-contributor-free opencode-go/iceman-contributor-free opencode/iceman-contributor-free \
          opencode/muse-spark-1.3-contributor-free opencode-go/grok-4.7 codex:grok-4.7; do
   check_vetoed "$m"
 done

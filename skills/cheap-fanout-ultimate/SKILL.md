@@ -27,8 +27,8 @@ Funciona con o sin fan-out previo: también sobre un diagnóstico/solución suel
 
 | Asiento | Vía | Presupuesto |
 |---|---|---|
-| GPT Sol | `codex:gpt-6.1-sol` en jobs.tsv (II 52; exige Codex ≥ 0.159.1). Con un Codex anterior: `codex:gpt-6-astra` (II 53) | ChatGPT (≈1-2 msgs de la ventana: 15-160 por 5h en Plus con 6.1 Sol, 5-45 con Astra; si la sesión ya necesita codex como desborde de Go, contémplalo) |
-| Kimi K3 | `kimi-code-plan-cn/k3` en jobs.tsv (con `KIMI_API_KEY` o la credencial bajo ese nombre; el id viejo `kimi-for-coding/k3` el helper lo traduce) | Allegretto — **cuenta como 1 de las 1-2 unidades quirúrgicas K3 de la sesión**. Es lento (AA: 34 tokens/s; 31-43s en una extracción chica): dale plazo `8m` y no esperes un asiento rápido |
+| GPT Sol | `codex:gpt-6.1-sol` en jobs.tsv (II 50-55, AA v5.0.1; exige Codex ≥ 0.159.1, aquí 0.166.0). Con un Codex anterior: `codex:gpt-6-astra` | ChatGPT (≈1-2 msgs de la ventana: 15-160 por 5h en Plus con 6.1 Sol, 5-45 con Astra; si la sesión ya necesita codex como desborde de Go, contémplalo). Medido el 2026-11-05: 60s, causa correcta pero cautelosa |
+| Kimi K3 | `kimi-k3` en jobs.tsv, **por Go**. La suscripción directa Allegretto (`kimi-code-plan-cn/k3`) está **pausada desde el 2026-11-05**: no la uses | Cuota **Go** del modelo (110 req/5h, límite de 15 USD ⇒ ~490 requests al mes) — **cuenta como 1 de las 1-2 unidades quirúrgicas K3 de la sesión**. Medido el 2026-11-05: 61s y mecanismo completo. Dale plazo `8m` igualmente |
 | Orquestador (tú) | Tu postura escrita ANTES de lanzar (paso 1) | La sesión misma |
 
 **No hay asiento `claude -p` fresco:** comparte pesos y priors contigo (serían ~2.2 opiniones
@@ -36,32 +36,36 @@ independientes, no 3) y quema la misma cuota Max del orquestador. Solo se evalú
 muestra juez-y-parte (ver kill criteria).
 
 **Nota de asiento Sol:** `codex:gpt-6.1-sol` fuerza el modelo con `-m`. Un job `codex` pelado usa
-el default de `~/.codex/config.toml` (hoy `gpt-6-astra`, el más caro de la cuota), que NO es Sol —
-siempre escribe el sufijo. En Codex 0.157.1 `gpt-6.1-sol` fallaba con "not supported when using
-Codex with a ChatGPT account" (el modelo entró al catálogo en la 0.159.1); aquí Codex ya está en
-0.159.3 y `codex:gpt-6.1-sol` responde (verificado 2026-10-01). En una máquina con un Codex
-anterior, el asiento va con `codex:gpt-6-astra`. El paquete del consejo viaja en el prompt, no como archivo, así
-que no depende del sandbox de codex (que aquí funciona desde el 2026-10-01, tras cargar el perfil de
-AppArmor de bwrap).
+el default de `~/.codex/config.toml` (hoy `gpt-6-luna` con esfuerzo high, el más barato de la cuota;
+el 2026-10-01 era `gpt-6-astra`), que NO es Sol — siempre escribe el sufijo. `gpt-6.1-sol` exige
+Codex ≥ 0.159.1 (con 0.157.1 daba "not supported when using Codex with a ChatGPT account"); aquí
+Codex está en 0.166.0 y `codex:gpt-6.1-sol` responde (verificado 2026-11-05). En una máquina con un
+Codex anterior, el asiento va con `codex:gpt-6-astra`. El paquete del consejo viaja en el prompt, no
+como archivo, así que no depende del sandbox de codex (que aquí funciona: perfil de AppArmor de bwrap
+cargado, reverificado el 2026-11-05).
 
-**Si Allegretto falla, el asiento sustituto tiene que ser de OTRO lab.** El fallback natural,
-`opencode-go/kimi-k3`, comparte pesos con el asiento caído: si lo usas, sigue siendo el mismo
-consejero, no uno nuevo (y desde agosto 2026 trae límite de **15 USD/mes** ⇒ ~490 requests al mes, así que
-tampoco es un recurso holgado). Cuando K3 no esté disponible por ninguna puerta, la sustitución
-que preserva la independencia es un frontier de otro lab del pool Go: `opencode-go/qwen3.8-max`
-(Alibaba, II 45, 160 req/5h), `opencode-go/glm-5.3` (Zhipu, II 45, 220 req/5h) o
-`opencode-go/mimo-v2.6-pro` (Xiaomi, II 46, 3,250 req/5h; lento, ~150s en una tarea chica).
-**`grok-4.6` y `grok-4.7` no son opción: están fuera** (ver *Modelos vetados* en el skill
-cheap-fanout), y el helper rechaza el lote entero si aparecen. Anótalo en el log: un consejo con asiento sustituto no es comparable con uno normal.
+**Kimi directo (Allegretto) está pausado desde el 2026-11-05: el asiento Kimi va por Go (`kimi-k3`).**
+Si `kimi-k3` se queda sin cuota (su límite de 15 USD es propio), el sustituto que conserva al lab es
+`kimi-k3.1-pro` (otro modelo, límite propio, II 46): dio el mismo mecanismo completo en la prueba pero
+tardó **244s**, así que cabe en el plazo de `8m` pero no esperes rapidez. Si Kimi falla por completo,
+el sustituto tiene que ser de **OTRO lab**: `opencode-go/gemini-4-argon` (Google; II 50; 440 req/5h; 0
+días de retención; 62s y mecanismo completo en la prueba; su 50% de descuento vence el 2026-11-30),
+`opencode-go/glm-5.3` (Zhipu; II 23-32; 220 req/5h) u `opencode-go/qwen3.8-max` (Alibaba; II 34; 160
+req/5h). **No sustituyas con `gpt-6.1-terra` ni con otro modelo de OpenAI** (ya hay un asiento OpenAI:
+Sol; y Terra dio solo 3 de 6 términos de la causa) ni con DeepSeek. **`grok-4.6` y `grok-4.7` no son
+opción: están fuera** (ver *Modelos vetados* en el skill cheap-fanout), y el helper rechaza el lote
+entero si aparecen. Anótalo en el log: un consejo con asiento sustituto no es comparable con uno
+normal.
 
 **Privacidad de los asientos — el paquete del consejo lleva el problema completo.** Ya está la
 regla de no mandar datos identificables del cliente; súmale la del lado del modelo (tabla de
-`opencode.ai/docs/go`, leída 2026-10-01). Están **vetados de raíz** y el helper los rechaza en
-pre-vuelo: `muse-spark-1.2-contributor` y `muse-spark-1.3-contributor` (entrenan con tus datos, no
-son ZDR), `grok-4.6` y `grok-4.7` — jamás como asiento ni para nada de este flujo. De los que
-quedan, `gpt-6-luna` y `gpt-5.6-luna` retienen 30 días, DeepSeek tiene un acuerdo ZDR solo hasta el
-2026-10-31, y el resto del pool 0 días. Si el paquete toca material sensible, el consejo va por Allegretto +
-codex, que son suscripciones tuyas, no por el pool Go.
+`opencode.ai/docs/go`, leída 2026-11-05). Están **vetados de raíz** y el helper los rechaza en
+pre-vuelo: `muse-spark-1.2-contributor`, `muse-spark-1.3-contributor` e `iceman-contributor-free`
+(entrenan con tus datos, no son ZDR), `grok-4.6` y `grok-4.7` — jamás como asiento ni para nada de este flujo. De los que
+quedan, `gpt-6-luna`, `gpt-5.6-luna`, `claude-haiku-5-5` y `beam-free` retienen 30 días, DeepSeek tiene
+un acuerdo ZDR solo hasta el 2026-11-30, y el resto del pool 0 días (`kimi-k3`, `kimi-k3.1-pro`,
+`gemini-4-argon` y `glm-5.3` incluidos). Si el paquete toca material sensible, el consejo va por codex
+(suscripción tuya) + un asiento Go de 0 días de retención (`kimi-k3`), nunca por un modelo de 30 días.
 
 ## Flujo
 
@@ -80,7 +84,7 @@ codex, que son suscripciones tuyas, no por el pool Go.
 
    ```
    codex:gpt-6.1-sol	consejo-paquete.md	consejo-sol.out	8m
-   kimi-code-plan-cn/k3	consejo-paquete.md	consejo-k3.out	8m
+   kimi-k3	consejo-paquete.md	consejo-k3.out	8m
    ```
    ```bash
    ~/.claude/skills/cheap-fanout/bin/cheap-fanout --parallel 2 jobs.tsv
@@ -91,9 +95,9 @@ codex, que son suscripciones tuyas, no por el pool Go.
 
    **Timeout por asiento: 8 min, y lo pones en la 4ª columna** — el helper mata solo a ese asiento
    al vencer y deja `.status`=124, sin tocar al otro. Una respuesta frontier completa tarda 2-5 min
-   normalmente; NO improvises timeboxes de segundos, matarías asientos sanos. Asiento muerto o
+   normalmente (medido el 2026-11-05 con un paquete de ~700 palabras y respuesta de ≤800: Sol 60s, `kimi-k3` 61s, `gemini-4-argon` 62s, `gpt-6.1-terra` 23s, `kimi-k3.1-pro` 244s); NO improvises timeboxes de segundos, matarías asientos sanos. Asiento muerto o
    imparseable → el consejo **degrada** a lo que haya + tu postura; nunca bloquea, nunca se
-   reintenta dentro de la misma convocatoria. (La regla >5 min del K3-subteniente NO aplica aquí:
+   reintenta dentro de la misma convocatoria. (La regla >5 min de K3 como pre-revisor NO aplica aquí:
    son clases de job distintas con presupuestos de tiempo distintos — por eso el plazo va por
    línea y no como política global del helper.)
 4. **Arbitraje (tú, nunca un barato ni K3):** descompón cada respuesta en claims atómicos. Una
@@ -167,7 +171,7 @@ máx 800 palabras, densidad sobre extensión.
 
 - Regla #3: desacuerdos y datos de alto impacto → **fuente primaria**. En especial los claims
   factuales de Sol: `codex exec` no tiene web search, no pudo auto-verificarse.
-- La plantilla de veredictos del K3-subteniente **NUNCA** se usa aquí; consejero y subteniente son
+- La plantilla de veredictos del subteniente (pre-revisor) **NUNCA** se usa aquí; consejero y subteniente son
   roles distintos en jobs distintos sin estado compartido.
 - La confianza auto-reportada de un asiento no es señal.
 
@@ -175,12 +179,12 @@ máx 800 palabras, densidad sobre extensión.
 
 | Síntoma | Arreglo |
 |---|---|
-| `gpt-6.1-sol` da "not supported when using Codex with a ChatGPT account" | Tu Codex es anterior a 0.159.1: actualiza (`npm i -g @openai/codex@0.159.3`) o usa `codex:gpt-6-astra` mientras tanto. Verificado el 2026-10-01 en 0.157.1: `gpt-6-astra`, `gpt-6-sol` y `gpt-6-luna` responden |
+| `gpt-6.1-sol` da "not supported when using Codex with a ChatGPT account" | Tu Codex es anterior a 0.159.1: actualiza (`npm i -g @openai/codex@latest`; hoy es la 0.166.0) o usa `codex:gpt-6-astra` mientras tanto. Verificado el 2026-10-01 en 0.157.1: `gpt-6-astra`, `gpt-6-sol` y `gpt-6-luna` responden |
 | Asiento K3 >8 min | El helper ya lo mató (`.status`=124). Consejo degrada a Sol + tu postura. Anota el timeout en el log |
-| Asiento K3 falla al instante con `UnknownError` | No es timeout: opencode ≥ 1.18.31 busca la credencial bajo `kimi-code-plan-cn` y la tuya sigue como `kimi-for-coding` en `~/.local/share/opencode/auth.json`. Exporta `KIMI_API_KEY` o copia la entrada. Ver *K3 y Kimi* en el skill cheap-fanout |
-| K3 caído por las dos puertas (Allegretto y Go) | Sustituye por un frontier de OTRO lab (`opencode-go/qwen3.8-max`, `opencode-go/glm-5.3`, `opencode-go/mimo-v2.6-pro`); nunca por otro Kimi/DeepSeek, que no aporta independencia, ni por `grok-4.6`/`grok-4.7`, que están fuera. Anota la sustitución en el log |
-| Asiento Go rebotado por cuota | Corre `go-budget`: cada modelo tiene su propio límite mensual (15 USD para `kimi-k3`, `qwen3.8-max`, `glm-5.3` y `mimo-v2.6-pro`; ya no hay pozo global), así que otro modelo Go tiene presupuesto; si ese también falla, el consejo degrada a Allegretto + codex + tu postura |
-| `cheap-fanout: MODELO VETADO` al lanzar los asientos | Un asiento apunta a `muse-spark-1.x-contributor` o `grok-4.6`/`grok-4.7`. No uses el override: cámbialo por `qwen3.8-max` o `glm-5.3` |
+| Asiento Kimi falla al instante con `Your current subscription does not have access to Kimi Code right now` | Usaste la ruta directa pausada (`kimi-code-plan-cn/*`). Cámbiala a `kimi-k3` (Go). Si el fallo es `UnknownError` con `opencode-go/kimi-k3`, prueba `opencode run -m opencode-go/kimi-k3 "Responde exactamente: PONG"` y `go-budget --model kimi-k3` |
+| `kimi-k3` caído o sin cuota en Go | Prueba `kimi-k3.1-pro` (mismo lab, límite propio, ~4 min). Si Kimi falla por completo: un frontier de OTRO lab (`opencode-go/gemini-4-argon`, `opencode-go/glm-5.3`, `opencode-go/qwen3.8-max`); nunca por DeepSeek, `gpt-6.1-terra` ni `grok-4.6`/`grok-4.7`, que están fuera. Anota la sustitución en el log |
+| Asiento Go rebotado por cuota | Corre `go-budget`: cada modelo tiene su propio límite mensual (15 USD para `kimi-k3`, `kimi-k3.1-pro`, `qwen3.8-max` y `glm-5.3`; 30 USD `gemini-4-argon`; ya no hay pozo global), así que otro modelo Go tiene presupuesto; si ese también falla, el consejo degrada a codex + tu postura |
+| `cheap-fanout: MODELO VETADO` al lanzar los asientos | Un asiento apunta a `muse-spark-1.x-contributor`, `iceman-contributor-free` o `grok-4.6`/`grok-4.7`. No uses el override: cámbialo por `gemini-4-argon` o `glm-5.3` |
 | `consejo-sol.out` vacío pero status=0 | Mira `consejo-sol.out.log`: el helper vuelca ahí la traza de codex |
 | Sol devuelve dato factual sin fuente | No lo adoptes sin verificar en primaria (Sol no tiene web) |
 | Los dos asientos coinciden en todo | Sospecha prior compartido; verifica el claim central en primaria antes de celebrarlo. Anota "sin desacuerdo" en el log |

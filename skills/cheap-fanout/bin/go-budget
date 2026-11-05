@@ -2,8 +2,8 @@
 # go-budget — cuánto llevas gastado del plan OpenCode Go, por modelo y en tres ventanas.
 #
 # Desde 2026-10-01 la doc de Go (opencode.ai/docs/go) define los límites POR MODELO, no con un
-# pozo global: cada modelo trae un límite mensual en dólares ($60, $30 o $15 en el plan Go de
-# $10; el plan Go Plus de $40 los multiplica) y de ahí salen sus tres ventanas:
+# pozo global: cada modelo trae un límite mensual en dólares ($100, $60, $30, $20 o $15 en el plan
+# Go de $10; Go Plus de $40 y Go Teams de $20/miembro los suben) y de ahí salen sus tres ventanas:
 #     5 horas = 20% del límite mensual · semana = 50% · mes = 100%
 # Un modelo de $60 permite $12/5h, $30/semana y $60/mes (los números que antes eran "el pozo
 # global"); uno de $15 permite $3/5h, $7.50/semana y $15/mes. Agotar un modelo NO agota a los
@@ -31,9 +31,10 @@
 #   - Las ventanas se calculan como los últimos 5h/7d/30d corridos. La doc no dice si el
 #     proveedor usa ventana corrida o calendario — si estás cerca del límite, confirma en la
 #     consola: https://opencode.ai/auth
-#   - Los límites por modelo son los de la doc leída el 2026-10-01 y asumen el plan Go ($10).
-#     Con Go Plus multiplícalos (GO_PLUS=1 usa los de Go Plus que la doc publica). Un modelo que
-#     no esté en la lista sale con límite "?" y no afecta el exit code.
+#   - Los límites por modelo son los de la doc leída el 2026-11-05 y asumen el plan Go ($10).
+#     GO_PLUS=1 usa los de Go Plus que la doc publica; GO_TEAMS=1 suma 5 USD a cada límite no
+#     libre (regla de la doc para Go Teams). Un modelo que no esté en la lista sale con límite
+#     "?" y no afecta el exit code.
 set -uo pipefail
 # printf/awk deben usar punto decimal: con locale es_MX, "%.4f" rechaza "0.0443".
 export LC_NUMERIC=C
@@ -55,40 +56,48 @@ command -v opencode >/dev/null 2>&1 || { echo "go-budget: opencode no está en P
 
 # Modelos vetados (ver SKILL.md). Aquí NO se ocultan: si aparecen con gasto es que algo se los
 # saltó, y eso es justo lo que quieres ver.
-VETADOS="muse-spark-1.2-contributor muse-spark-1.3-contributor grok-4.6 grok-4.7"
+VETADOS="muse-spark-1.2-contributor muse-spark-1.3-contributor iceman-contributor-free grok-4.6 grok-4.7"
 
-# Límite mensual por modelo, plan Go — opencode.ai/docs/go, columna "Monthly limit" (2026-10-01).
+# Límite mensual por modelo, plan Go — opencode.ai/docs/go, columna "Monthly limit" (2026-11-05).
 # Un modelo con límite 0 es gratuito e ilimitado (se muestra "libre"). La tabla se queda
 # COMPLETA a propósito, vetados y modelos ya retirados de la doc incluidos: es la contabilidad
 # de lo gastado en los últimos 30 días, no una recomendación de ruteo.
 TOPES='
-mimo-v2.5 60
-mimo-v2.6-flash 60
-longcat-2.0 60
-hy3 60
 glm-5.3-flash 60
+glm-5.3 15
 glm-5.2 60
-deepseek-v4.1-flash 60
-qwen3.7-plus 60
-minimax-m3 60
-minimax-m2.7 60
+kimi-k3.1-pro 15
+kimi-k3 15
 kimi-k2.7-code 60
-kimi-k2.6 60
+longcat-2.0 60
+step-5-preview 15
+beam-free 0
+iceman-contributor-free 0
+mimo-v2.6-flash 60
+mimo-v2.6-pro 15
+mimo-v2.5 60
+mimo-v2.5-pro 15
+minimax-m3.1-flash 20
+minimax-m3 60
 muse-spark-1.3-contributor 60
 muse-spark-1.2-contributor 60
-deepseek-v4-flash 30
-qwen3.8-flash 30
-hy4-preview 30
-mimo-v2.6-pro 15
-mimo-v2.5-pro 15
-glm-5.3 15
-kimi-k3 15
 qwen3.8-max 15
+qwen3.8-flash 30
+qwen3.7-plus 60
+deepseek-v4.1-flash 100
 deepseek-v4-pro 15
-deepseek-v4-flash-vision-exp 15
+hy4 60
+hy4-preview 30
+hy3 60
+grok-4.7 15
 gpt-6-luna 15
 gpt-5.6-luna 15
-grok-4.7 15
+claude-haiku-5-5 15
+gemini-4-argon 30
+deepseek-v4-flash 30
+deepseek-v4-flash-vision-exp 15
+minimax-m2.7 60
+kimi-k2.6 60
 grok-4.6 15
 longcat-2.5-preview-free 0
 space-bunny-free 0
@@ -101,37 +110,51 @@ grok-4.5 15
 # Go Plus ($40/mes): los mismos modelos con el límite que publica la doc (no es un múltiplo único).
 if [ "${GO_PLUS:-0}" = 1 ]; then
   TOPES='
-mimo-v2.5 120
-mimo-v2.6-flash 120
-longcat-2.0 240
-hy3 240
 glm-5.3-flash 180
+glm-5.3 120
 glm-5.2 180
-deepseek-v4.1-flash 120
-qwen3.7-plus 180
-minimax-m3 180
-minimax-m2.7 240
+kimi-k3.1-pro 60
+kimi-k3 60
 kimi-k2.7-code 180
-kimi-k2.6 240
+longcat-2.0 240
+step-5-preview 60
+beam-free 0
+iceman-contributor-free 0
+mimo-v2.6-flash 120
+mimo-v2.6-pro 60
+mimo-v2.5 120
+mimo-v2.5-pro 60
+minimax-m3.1-flash 80
+minimax-m3 180
 muse-spark-1.3-contributor 120
 muse-spark-1.2-contributor 120
-deepseek-v4-flash 120
-qwen3.8-flash 90
-hy4-preview 120
-mimo-v2.6-pro 60
-mimo-v2.5-pro 60
-glm-5.3 120
-kimi-k3 60
 qwen3.8-max 60
+qwen3.8-flash 90
+qwen3.7-plus 180
+deepseek-v4.1-flash 200
 deepseek-v4-pro 60
-deepseek-v4-flash-vision-exp 60
+hy4 240
+hy4-preview 120
+hy3 240
+grok-4.7 60
 gpt-6-luna 60
 gpt-5.6-luna 60
-grok-4.7 60
+claude-haiku-5-5 60
+gemini-4-argon 120
+deepseek-v4-flash 120
+deepseek-v4-flash-vision-exp 60
+minimax-m2.7 240
+kimi-k2.6 240
 grok-4.6 60
 longcat-2.5-preview-free 0
 space-bunny-free 0
 '
+fi
+# Go Teams ($20/miembro/mes): la doc dice "$5/month higher than Go on every model" (verificado
+# 2026-11-05 en las 31 filas de la doc: p. ej. glm-5.3-flash 65, deepseek-v4.1-flash 105). Cada miembro
+# tiene sus propios límites. Los modelos libres (0) siguen libres.
+if [ "${GO_TEAMS:-0}" = 1 ]; then
+  TOPES="$(printf '%s\n' "$TOPES" | awk 'NF==2{ if ($2>0) $2=$2+5; print; next } {print}')"
 fi
 
 # Gasto por modelo y ventana: modelID<TAB>ventana<TAB>gastado (solo las filas con gasto).
@@ -248,7 +271,7 @@ case "$MODE" in
       0) echo "holgado — el ancho puede ir a opencode-go";;
       1) echo "APRETADO — algún modelo está ≥80% en una ventana: cambia ESE job de modelo";;
       2) echo "AGOTADO — el modelo pedido no tiene presupuesto en alguna ventana: usa otro";
-         echo "  modelo Go, un free sin entrenamiento, codex o kimi-code-plan-cn/k3";;
+         echo "  modelo Go, un free sin entrenamiento o codex";;
     esac
     ;;
 esac

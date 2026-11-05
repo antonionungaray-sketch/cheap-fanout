@@ -4,6 +4,108 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). L
 `.claude-plugin/plugin.json`. Para la evidencia detrás de cada cambio, ver los documentos de
 hallazgos en [`Bugs/`](Bugs/).
 
+## [1.4.0] — 2026-11-05 (sin publicar)
+
+Evidencia completa: [`Bugs/hallazgos-2026-11-05.md`](Bugs/hallazgos-2026-11-05.md).
+
+> **Estado del release:** cambios hechos en el árbol de trabajo, **sin commit, sin bump de
+> `plugin.json` y sin push**. La investigación, las mediciones y los cambios los hizo Claude Sonnet
+> 5.5; falta la revisión previa a publicar que tuvo el 1.3.0. Datos de catálogo, precios y cuotas al
+> 2026-11-05.
+
+### ⚠ Antes de actualizar: cambios de comportamiento
+
+1. **El caballo del ancho cambió de `deepseek-v4.1-flash` a `minimax-m3.1-flash`.** DeepSeek pasó de
+   17s a una latencia bimodal: 8 de 13 corridas del 2026-11-05 (la última tanda, ~1 h después de la
+   primera) tardaron 117-216s, vencieron o fallaron con `[prefill_cap_refused] the cell is at capacity`
+   o `[overloaded]`. `glm-5.3-flash` y `gpt-6-luna` son
+   los segundos caballos. DeepSeek queda como fallback y para contexto ultra-largo (caché a 0.003);
+   **re-mídelo antes de devolverle el puesto**. Un `jobs.tsv` con DeepSeek sigue funcionando.
+2. **Pre-revisor por default: `minimax-m3.1-flash`** (163s; `gpt-6-luna` 86s como alternativa rápida).
+   `glm-5.3-flash` y `claude-haiku-5-5` dieron falsos OK en el lote medido. Segundo revisor en lotes
+   de alto impacto: `kimi-k3` **por Go** (196s).
+3. **Veto nuevo: `iceman-contributor-free`** (pedido por Antonio el 2026-11-05; entrena con tus prompts
+   y no es ZDR, igual que muse-spark). El helper lo rechaza en pre-vuelo con exit 2 —también como
+   `opencode-go/…` y `opencode/…`—; `go-budget` lo marca si aparece con gasto. `CHEAP_FANOUT_ALLOW_VETOED=1`
+   sigue siendo el único override.
+4. **Kimi directo (`kimi-code-plan-cn/*`) queda fuera del ruteo**: Antonio pausó la suscripción y las
+   tres rutas responden *"Your current subscription does not have access to Kimi Code right now"*.
+   K3 va por Go. El helper conserva el alias `kimi-for-coding/*`; `reference/kimi.md` conserva todo.
+5. **Unidad difícil: `claude-haiku-5-5`** (antes `glm-5.3-flash`). La razón anterior (II 42 ≈ K3) era
+   de otra versión del índice: en la v5.0.1 `glm-5.3-flash` marca 28.
+6. **Todos los índices II se releyeron en Artificial Analysis v5.0.1** (la tercera versión en dos
+   meses; AA publica un valor por nivel de esfuerzo, así que van como rango). No los mezcles con los de
+   versiones anteriores.
+7. **`go-budget`**: tabla de límites de Go y Go Plus al 2026-11-05 (`deepseek-v4.1-flash` pasó de 60 a
+   100 USD; entran `claude-haiku-5-5`, `gemini-4-argon`, `kimi-k3.1-pro`, `minimax-m3.1-flash`,
+   `step-5-preview`, `hy4`, `beam-free`, `iceman-contributor-free`) y variable nueva `GO_TEAMS=1`
+   (Go + 5 USD por modelo; la regla se verificó en las 39 filas de la doc). Sin cambios de formato.
+
+8. **Codex y `cheap-fanout-ultimate`.** Codex ya estaba en 0.166.0 (la última); se reverificó y se actualizó
+   lo que el skill decía (modelos, cuotas, default de `config.toml` = `gpt-6-luna`/high, `gpt-6.1-terra`
+   nuevo). En `cheap-fanout-ultimate` el **asiento Kimi pasa a Go** (`kimi-k3`) porque la suscripción
+   directa está pausada; sustitutos y plazos según una prueba real de los asientos (Sol 60s, `kimi-k3`
+   61s, `gemini-4-argon` 62s, `kimi-k3.1-pro` 244s). `gpt-6.1-terra` y otros modelos de OpenAI **no**
+   sirven de sustituto.
+
+### Novedades del plan Go (doc del 2026-11-05)
+
+- **Plan nuevo Go Teams** (20 USD/miembro/mes, límites de Go + 5 USD en cada modelo, solo para
+  workspaces con varios miembros, con Extra Usage encendido de fábrica). Go y Go Plus siguen igual.
+- **Modelos nuevos:** `claude-haiku-5-5`, `gemini-4-argon` (50% de descuento hasta el 2026-11-30),
+  `kimi-k3.1-pro`, `minimax-m3.1-flash`, `step-5-preview`, `hy4`, `beam-free` e
+  `iceman-contributor-free`.
+- **Muertos:** `mimo-v2.5` y `mimo-v2.5-pro` (error duro de deprecación aunque la tabla de la doc los
+  conserva), `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `kimi-k2.6`, `minimax-m2.7`, y los
+  free de Go `longcat-2.5-preview-free`, `space-bunny-free` y `step-5-preview-free`.
+- **Privacidad:** el acuerdo ZDR de DeepSeek vale hasta el 2026-11-30 (antes 10-31). El workspace
+  bloquea por default los endpoints que entrenan: `iceman-contributor-free` responde con error.
+- **Gemelos free seguros otra vez:** `opencode/glm-5.3-flash-free` y `opencode/deepseek-v4.1-flash-free`
+  responden y declaran cero retención y cero entrenamiento.
+- **Endpoint público** `https://opencode.ai/inference/go/v1/models` (sin llave): lista autoritativa de
+  lo servible; el skill ya lo cita. La doc de Zen pasó a llamarse *Models* en la consola
+  (`/v2/docs/console/models/`; la URL vieja sigue sirviendo lo mismo).
+- Cada respuesta de Go informa cuánto contó la petición en `opencode.allowance`.
+
+### Cambios por archivo
+
+- `skills/cheap-fanout/SKILL.md`: roles, flujo (pre-revisión), tabla de ruteo entera, pre-revisión,
+  unidad difícil, catálogo, peak DeepSeek, privacidad, vetos, gratuitos, cuota (Go Teams, Extra Usage),
+  Kimi, plantilla de pre-revisión (+ "¿omite algo que el prompt exigía?" y "¿truncada?") y reglas de
+  oro 5, 7 y 8.
+- `skills/cheap-fanout/reference/catalogo-go.md`: reescrito (31 modelos, II v5.0.1, velocidades,
+  comparación de pre-revisores del 2026-11-05, DeepSeek bimodal, prueba web). Las comparaciones del
+  2026-10-01 se conservan como historia.
+- `skills/cheap-fanout/reference/troubleshooting.md`: seis firmas de error nuevas y filas de Kimi/DeepSeek
+  actualizadas. `reference/kimi.md`: banner de pausa. `README.md`: requisitos, ejemplo y gemelos.
+- `skills/cheap-fanout/bin/go-budget`: tablas, `GO_TEAMS`, veto de `iceman-contributor-free` y el texto del estado AGOTADO.
+- `skills/cheap-fanout/bin/cheap-fanout`: **solo** el veto de `iceman-contributor` (el id va sin `-free`
+  porque `bare_id()` lo quita) y el **texto** de los mensajes (rechazo por veto y "sin cuota": ya no
+  recomiendan DeepSeek, Kimi directo ni free muertos). La lógica no cambió. `test/detectores-y-vetos.sh` cubre las tres formas del id.
+- `skills/cheap-fanout-ultimate/SKILL.md`: asientos, sustitutos, privacidad, plazos medidos, troubleshooting, vetados y referencias a Codex/Kimi. `reference/codex.md`: reescrito a 0.166.0.
+- `install.sh`: `--check` ya no marca Kimi directo como "disponible" (la credencial existe, la suscripción está pausada).
+
+### Pendiente de tu decisión (no lo apliqué)
+
+1. **Habilitar el rescate por cuota en los dos gemelos seguros**: `SAFE_FREE_TWINS="opencode/glm-5.3-flash-free opencode/deepseek-v4.1-flash-free"`
+   en `bin/cheap-fanout` (una línea; hay que ajustar el test de la sección 4).
+2. **Reintentar con backoff `[prefill_cap_refused]`** en el helper, igual que la carrera de SQLite
+   (el job muere antes de generar: reintentar es barato). Hoy sale con exit 1.
+3. **opencode 2.x**: existe (v2.2.5, 2026-10-30) y 1.x sigue vivo. **El CLI local se actualizó de 1.18.35 a
+   1.19.5** (la última 1.x; `opencode upgrade v1.19.5 -m curl`, con versión fija porque la 1.18.35 aún no
+   conoce `--major`). Validado en 1.19.5: `opencode db`, `go-budget` (mismos totales), los flags que usa el
+   helper (`--auto`, `--dir`, `-m`), `test/detectores-y-vetos.sh`, `test/dos-lotes.sh` y
+   `test/sqlite-race.sh` (6/6 y 0 muertos sobre base fría) y un lote de 6 PONG por el helper; velocidad sin
+   regresión (`minimax-m3.1-flash` 13-16s, `glm-5.3-flash` 17-21s, `gpt-6-luna` 10-12s). Respaldo de la
+   1.18.35 y de la base en el scratchpad de la sesión. El salto a 2.x (`opencode upgrade --major`) sigue
+   **sin validar**: el changelog no dice nada de `opencode db` ni del esquema SQLite.
+
+### Abierto, no verificado
+
+- La saturación de DeepSeek puede ser pasajera; la comparación de pre-revisores es de un lote de 5
+  unidades (evidencia delgada); la calidad de `claude-haiku-5-5` en una unidad realmente difícil no se
+  midió; las cuotas de Codex y el estado de Kimi directo no se releyeron más allá de la pausa.
+
 ## [1.3.0] — 2026-10-01
 
 Evidencia completa: [`Bugs/hallazgos-2026-10-01.md`](Bugs/hallazgos-2026-10-01.md).
