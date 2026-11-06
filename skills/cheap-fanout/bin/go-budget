@@ -28,6 +28,11 @@
 #   - El `cost` lo calcula opencode con su propia tabla de precios; es su estimación, no la
 #     factura del proveedor. En DeepSeek hay precio peak/off-peak: si el lote corrió en peak,
 #     la estimación puede quedarse corta.
+#   - Un job cortado por plazo (124/137) lo cobra el proveedor, pero opencode no anota el costo
+#     del paso que estaba en curso: con timeouts en modelos caros, el gasto real es mayor.
+#   - La consola de Go muestra una sola barra por ventana; con los datos del 2026-11-06 cuadra con
+#     el MODELO MÁS CARGADO respecto a su propio límite, no con la suma (inferido, no confirmado).
+#     Por eso la tabla sale ordenada por carga y arriba va "más cargado".
 #   - Las ventanas se calculan como los últimos 5h/7d/30d corridos. La doc no dice si el
 #     proveedor usa ventana corrida o calendario — si estás cerca del límite, confirma en la
 #     consola: https://opencode.ai/auth
@@ -196,6 +201,8 @@ models="$(printf '%s\n' "$raw" | awk -F'\t' 'NF>=3 && $1!="" && $1!="null"{m[$1]
 
 worst=0
 out_m=""
+out_t=""          # mismas filas con el % máximo al frente, para ordenar la tabla por carga
+top_mid=""; top_pm=-1; top_win=""
 modelo_topado=""
 vetado_con_gasto=""
 pct_want=""
@@ -218,6 +225,11 @@ if [ -n "${models:-}" ]; then
     p5="$(pct "$s5" "$(awk -v t="$tope" 'BEGIN{printf "%.4f", t*0.2}')")"
     pmax="$p30"; [ "$p7" -gt "$pmax" ] && pmax="$p7"; [ "$p5" -gt "$pmax" ] && pmax="$p5"
     out_m="${out_m}model:${mid}\t${s30}\t${tope}\t${p30}\t${p7}\t${p5}\n"
+    out_t="${out_t}${pmax}\tmodel:${mid}\t${s30}\t${tope}\t${p30}\t${p7}\t${p5}\n"
+    if [ "$pmax" -gt "$top_pm" ]; then
+      top_pm="$pmax"; top_mid="$mid"
+      top_win="30d"; [ "$p7" = "$pmax" ] && top_win="7d"; [ "$p5" = "$pmax" ] && top_win="5h"
+    fi
     [ "$mid" = "$WANT_MODEL" ] && pct_want="$pmax"
     [ "$pmax" -ge 80 ] && [ "$worst" -lt 1 ] && worst=1
     if [ "$pmax" -ge 100 ]; then
@@ -240,6 +252,11 @@ case "$MODE" in
       "$g5" "$ref5" "$(pct "$g5" "$ref5")" "$g7" "$ref7" "$(pct "$g7" "$ref7")" "$g30" "$REF" "$(pct "$g30" "$REF")"
     printf "%b" "$out_m";;
   table)
+    if [ -n "$top_mid" ] && [ "$top_pm" -gt 0 ]; then
+      echo "más cargado: ${top_mid} — ${top_pm}% de su ventana ${top_win}"
+      echo "  (la barra de la consola de Go parece seguir al modelo más cargado, no a la suma; inferido, no confirmado)"
+      echo
+    fi
     printf "%-32s %10s %8s\n" "agregado (informativo)" gastado "ref*"
     printf "%-32s %10s %8s\n" 5h  "\$$(printf '%.4f' "$g5")"  "\$$ref5"
     printf "%-32s %10s %8s\n" 7d  "\$$(printf '%.4f' "$g7")"  "\$$ref7"
@@ -248,7 +265,10 @@ case "$MODE" in
     if [ -n "$out_m" ]; then
       echo
       printf "%-32s %10s %7s %6s %6s %6s\n" "modelo" "30d gastado" límite "30d" "7d" "5h"
-      printf "%b" "$out_m" | while IFS=$'\t' read -r v g l p30 p7 p5; do
+      # Ordenada por la ventana más llena de cada modelo (no por dólares): 1 USD en un modelo de
+      # límite 15 pesa casi 7 veces lo que en uno de 100. Los sin límite conocido o libres, al final.
+      { printf "%b" "$out_t" | sort -t$'\t' -k1,1nr -k3,3gr | cut -f2-
+        printf "%b" "$out_m" | awk -F'\t' '$3=="?" || $3=="libre"'; } | while IFS=$'\t' read -r v g l p30 p7 p5; do
         [ -n "${v:-}" ] || continue
         case "$p30" in
           "?"|"-") printf "%-32s %10s %7s\n" "${v#model:}" "\$$(printf '%.4f' "$g")" "$l"; continue;;
@@ -259,6 +279,8 @@ case "$MODE" in
       done
     fi
     echo
+    echo "Ojo: un job cortado por plazo (status 124/137) se cobra pero opencode no registra su costo;"
+    echo "  si hubo timeouts en modelos caros, el gasto real es mayor que el de esta tabla."
     if [ -n "$vetado_con_gasto" ]; then
       echo "OJO — modelo VETADO con gasto en los últimos 30 días: ${vetado_con_gasto}."
       echo "  Algo se saltó el veto del helper (¿CHEAP_FANOUT_ALLOW_VETOED, u otra herramienta?)."

@@ -4,6 +4,58 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). L
 `.claude-plugin/plugin.json`. Para la evidencia detrás de cada cambio, ver los documentos de
 hallazgos en [`Bugs/`](Bugs/).
 
+## [1.5.0] — 2026-11-06
+
+Evidencia completa: [`Bugs/hallazgos-2026-11-06.md`](Bugs/hallazgos-2026-11-06.md).
+
+> **Estado del release:** publicado el 2026-11-06. Investigación, mediciones y cambios de Claude Opus 5.5, que
+> también revisó el resultado (tests locales y un lote real). Sin revisión de otro modelo frontier.
+
+### ⚠ Antes de actualizar: cambios de comportamiento
+
+1. **`deepseek-v4.1-flash` vuelve a ser el caballo del ancho** (y pre-revisor por default). Re-medido
+   el 2026-11-06 en off-peak: 12/12 correctas en 19-55s, contra 41-76s de `minimax-m3.1-flash` en la
+   misma ronda. A igual exactitud es el que menos gasta del plan: límite 100 contra 20 de minimax y
+   caché de 0.003 contra 0.015 (medido: ~10x menos del límite propio por job). `minimax-m3.1-flash`
+   queda de respaldo.
+2. **Segundo pre-revisor en lotes de alto impacto: `codex:gpt-6.1-terra`** (antes `kimi-k3` por Go).
+   Detectó 7/7 fallas sembradas en 30s, tiene II 42-51 y gasta cuota ChatGPT, no Go. Con impacto muy
+   alto, `codex:gpt-6.1-sol`; con material sensible, `gemini-4-argon` (0 días de retención).
+3. **`kimi-k3` sale de la pre-revisión.** Sin Kimi directo gasta de su límite Go de 15 USD (el más
+   bajo) a 3/15 por millón de tokens (el más caro): un día de pre-revisiones y consejo lo llevó a ~40% de
+   su semana. Queda para el asiento Kimi del consejo.
+4. **El helper reintenta la saturación del proveedor**: `[overloaded]` y `[prefill_cap_refused]` se
+   relanzan dos veces (10s, 20s + jitter; `CHEAP_FANOUT_CAP_RETRIES`, `CHEAP_FANOUT_CAP_RETRY_BASE`).
+   Si persiste, **`.status=76`** (nuevo) y el resumen lo cuenta. Los timeouts no se reintentan.
+5. **`go-budget` ordena por carga, no por dólares**, y pone arriba "más cargado: <modelo> — N% de su
+   ventana": la barra única de la consola de Go cuadra con ese modelo, no con la suma (inferido).
+   Avisa además que los jobs cortados por plazo se cobran pero opencode no los registra. El formato
+   `--tsv` no cambia.
+
+### Investigación: "los límites de Go se llenan muy rápido"
+
+- La doc de Go del 2026-11-06 es idéntica a la del 2026-11-05: **no hubo recorte**. El límite de
+  DeepSeek había subido de 60 a 100 USD el 2026-10-30.
+- Casi todo el gasto de la semana y del mes fue del 2026-11-05 (mediciones del 1.4.0). La consola
+  marcaba 40% semanal / 20% mensual: cuadra con ~3 USD de `kimi-k3` (límite 15), no con la suma de
+  ~7 USD de todos los modelos (11% / 23% contra un pozo de 60, o 36% / 72% ponderando por límite).
+- Cada job de opencode arranca con ~22.5K tokens de instrucciones y herramientas, aun para un PONG
+  (~0.07 USD en K3 antes de hacer nada).
+
+### Por archivo
+
+- `skills/cheap-fanout/SKILL.md`: roles, paso 5, aviso de velocidad, tabla de ruteo, privacidad
+  (DeepSeek con ZDR hasta el 2026-11-30; `codex:*` no para material del cliente), pre-revisión
+  (lote del 2026-11-06 y regla nueva), guardrails de K3, saturación en *Uso del helper*, `.status=76`,
+  reglas de oro 7 y 10 (nueva).
+- `skills/cheap-fanout/bin/cheap-fanout`: `is_capacity_error`, `cap_backoff_secs`, reintento,
+  `.capretried`, status 76 y resumen; mensaje de veto con DeepSeek primero.
+- `skills/cheap-fanout/bin/go-budget`: orden por carga, línea "más cargado" y aviso de timeouts.
+- `skills/cheap-fanout/test/detectores-y-vetos.sh`: sección 5 (detector + punta a punta con un
+  `opencode` falso): 27/27.
+- `skills/cheap-fanout/reference/catalogo-go.md`, `reference/troubleshooting.md`, `README.md`,
+  `.claude-plugin/*.json` (1.5.0).
+
 ## [1.4.0] — 2026-11-05
 
 Evidencia completa: [`Bugs/hallazgos-2026-11-05.md`](Bugs/hallazgos-2026-11-05.md).

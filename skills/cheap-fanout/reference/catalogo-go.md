@@ -1,4 +1,4 @@
-# Catálogo y mediciones del pool Go (releído 2026-11-05)
+# Catálogo y mediciones del pool Go (releído 2026-11-05; límites reconfirmados y DeepSeek re-medido el 2026-11-06)
 
 > Material de referencia del skill `cheap-fanout`. Ábrelo cuando la tabla de ruteo por caso del
 > `SKILL.md` no cubra un modelo o necesites el número exacto. Fuente de verdad: `opencode.ai/docs/go`
@@ -20,12 +20,12 @@ solo mide tiempo y confirma que ninguno falla.
 
 | id | req/5h | límite USD/mes | USD/1M in/out | ctx | II (v5.0.1) | seg | Nota |
 |----|-------:|:----------:|---|:--:|:--:|:--:|------|
-| `minimax-m3.1-flash` | 3,880 | 20 | 0.15/0.60 | 1M | 29 | 13 (10-21) | **DEFAULT del ancho.** Nuevo (2026-10-19). Texto+imagen+video, salida hasta 512K. Pre-revisor por default |
+| `minimax-m3.1-flash` | 3,880 | 20 | 0.15/0.60 | 1M | 29 | 13 (10-21) | **Respaldo del ancho** (fue default del 2026-11-05 al 11-06). 41-76s el 2026-11-06 en la misma ronda que DeepSeek. Límite 20: pesa ~10x más por job que DeepSeek. Nuevo (2026-10-19). Texto+imagen+video, salida hasta 512K. Pre-revisor por default |
 | `glm-5.3-flash` | 6,320 | 60 | 0.15/0.50 | 1M | 28 | 20 (17-25) | Segundo caballo; ya no es la "unidad difícil" (II 28 en v5). Texto+imagen+video. Dio falsos OK como pre-revisor |
 | `gpt-6-luna` | 4,230 | 15 | 0.10/0.50 | 1.1M | 21-28 | 17 (15-18) | Pre-revisor rápido (86s). Retiene 30 días. PDF. Mismo modelo en Codex |
 | `claude-haiku-5-5` | 3,850 | 15 | 0.10/0.50 | 1M | 25-36 | 18 (16-20) | **Nuevo.** Unidad difícil por default. PDF+imagen, 1M ctx. Retiene 30 días (Anthropic). 0.10/0.50 hasta 100K, 0.50/2.50 después |
-| `deepseek-v4.1-flash` | 43,330 | 100 | 0.15/0.60 | 1M | 29-33 | 21-25 / 117-122 / t.o. | **Saturado el 2026-11-05** (bimodal; ver SKILL.md). Texto+imagen. Caché 0.003. Límite subió de 60 a 100 el 2026-10-30. ZDR pactado hasta 2026-11-30 |
-| `kimi-k3` | 110 | 15 | 3.00/15.00 | 1M | — | 22 (15-24) | Segundo pre-revisor de lotes de alto impacto (196s). 110 req/5h. AA v5 ya no lo lista |
+| `deepseek-v4.1-flash` | 43,330 | 100 | 0.15/0.60 | 1M | 29-33 | 19-55 (2026-11-06; 12/12) | **DEFAULT del ancho y pre-revisor** desde el 2026-11-06. El 2026-11-05 estuvo saturado: 21-25 / 117-122 / t.o. (ver abajo). Texto+imagen. Caché 0.003. Límite subió de 60 a 100 el 2026-10-30. ZDR pactado hasta 2026-11-30 |
+| `kimi-k3` | 110 | 15 | 3.00/15.00 | 1M | — | 22 (15-24) | Asiento Kimi del consejo. **Ya no pre-revisa** (2026-11-06): el más caro por token con el límite más bajo; un día de uso el 2026-11-05 lo llevó a ~40% de su semana. AA v5 ya no lo lista |
 | `beam-free` | ilimitado | libre | gratis | 1M | 18 | 25 (16-28) | **Nuevo.** Gratis, no entrena, retiene 30 días; no disponible en varios países (México no está) |
 | `qwen3.8-flash` | 5,400 | 30 | 0.15/0.47 | 1M | — | 28 (23-30) | 27s estables. AA no lo lista (solo "Qwen3.8-Flash-Next") |
 | `glm-5.3` | 220 | 15 | 1.40/4.40 | 1M | 23-32 | 26 (23-30) | Unidad difícil con material sensible (0 días); 220 req/5h |
@@ -73,8 +73,7 @@ solo mide tiempo y confirma que ninguno falla.
   y `muse-spark`. `glm-5.3-flash` **ya no lista PDF** (antes el skill decía texto+imagen+video+PDF).
 
 > **Precio ≠ cuota ≠ límite ≠ velocidad.** Son cuatro cosas. El ancho va a los de cuota alta y buena
-> velocidad (`minimax-m3.1-flash`, `glm-5.3-flash`, `gpt-6-luna`, y `deepseek-v4.1-flash` cuando no
-> está saturado); los de <500 req/5h (`glm-5.3`, `qwen3.8-max`, `kimi-k3`, `kimi-k3.1-pro`,
+> velocidad (`deepseek-v4.1-flash`, `minimax-m3.1-flash`, `glm-5.3-flash`, `gpt-6-luna`); los de <500 req/5h (`glm-5.3`, `qwen3.8-max`, `kimi-k3`, `kimi-k3.1-pro`,
 > `gemini-4-argon`) son 1-2 unidades quirúrgicas por sesión, nunca el ancho.
 
 ## `deepseek-v4.1-flash` el 2026-11-05: latencia bimodal y saturación
@@ -92,7 +91,37 @@ Total: 8 de 13 corridas de ≥117s, vencidas o fallidas (solo 3 respondieron en 
 tiempo ⇒ saturación del proveedor, no del equipo. Un PONG por el helper con opencode ya en 1.19.5
 (más de una hora después) también dio `[overloaded]`: no es cosa de la versión del CLI. Un job `124` en
 el helper puede ser esto.
-**Re-mide** antes de devolverle el puesto de caballo del ancho.
+
+**Re-medido el 2026-11-06** (viernes 19:08-19:20 UTC, off-peak): misma extracción contra un
+fragmento de 11 KB de la doc de Go (10 modelos × precio, límite y req/5h, con cita). Ronda 1, 6
+DeepSeek + 3 minimax simultáneos: DeepSeek **29, 35, 36, 48, 54, 55s**, minimax 41, 76, 76s. Ronda 2,
+6 DeepSeek solos: **19, 25, 26, 30, 34, 43s**. Las 15 salidas, 10/10 correctas. Ningún
+`[overloaded]` ni `[prefill_cap_refused]`. Le devolví el puesto de caballo del ancho; el helper ahora
+reintenta esas dos firmas (`.status=76` si persisten). Evidencia de una tarde: si vuelve a saturarse,
+el respaldo es `minimax-m3.1-flash`.
+
+## Pre-revisión — lote de 5 unidades con fallas sembradas, medido el 2026-11-06
+
+Unidades: 5 copias de una extracción correcta (10 modelos × precio, límite, req/5h, con cita), con
+fallas sembradas por mí: **U01** limpia; **U02** dos números alterados contra su propia cita (límite
+de Kimi K3 15→30, output de Qwen3.8 Flash 0.47→0.74); **U03** truncada a media fila y sin `===FIN===`;
+**U04** dos filas omitidas sin declararlo; **U05** Argon a precio de lista (el prompt pedía el de
+descuento) y dígitos transpuestos (3,850→3,580). Siete pre-revisores en paralelo, plazo 10m:
+
+| Pre-revisor | Tiempo | Fallas (7) | U01 limpia | Gasta de |
+|---|--:|:--:|:--:|---|
+| `codex:gpt-6.1-terra` | **30s** | 7/7 | FALLO (exige cita a la columna de solicitudes) | ChatGPT |
+| `kimi-k3` | 31s | 7/7 | OK | Go, límite 15 (0.19 USD = 1.3% de su mes) |
+| `codex:gpt-6-luna` | 72s | 7/7 | DUDOSO (ídem) | ChatGPT |
+| `codex:gpt-6.1-sol` | 77s | 7/7 | DUDOSO (ídem) | ChatGPT |
+| `minimax-m3.1-flash` | 83s | 7/7 | OK (verificó cada cita como subcadena literal) | Go, límite 20 |
+| `gemini-4-argon` | 95s | 7/7 | OK | Go, límite 30 (0.14 USD) |
+| `deepseek-v4.1-flash` | 100s | 7/7 | OK | Go, límite 100 |
+
+El lote **no discrimina calidad** (todos 7/7); lo de U01 es lectura literal de la plantilla ("¿CADA
+número trae cita?"), no error. Decisión: pre-revisor `deepseek-v4.1-flash`; segundo en alto impacto
+`codex:gpt-6.1-terra` (sale de Go y es el más rápido; II 42-51 contra 21-28 de Luna); `codex:gpt-6.1-sol`
+si el impacto es muy alto; `gemini-4-argon` con material sensible. K3 deja el puesto por costo.
 
 ## Pre-revisión — lote de 5 unidades, medido el 2026-11-05
 

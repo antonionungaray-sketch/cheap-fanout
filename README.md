@@ -80,9 +80,9 @@ Un `jobs.tsv` separado por TABs, un job por línea:
 ```
 
 ```
-minimax-m3.1-flash	p01.md	o01.out	2m
-kimi-k3	p02.md	o02.out	8m
-codex:gpt-6-luna	p03.md	o03.out	4m
+deepseek-v4.1-flash	p01.md	o01.out	2m
+claude-haiku-5-5	p02.md	o02.out	5m
+codex:gpt-6.1-terra	p03.md	o03.out	4m
 ```
 
 ```bash
@@ -93,7 +93,7 @@ El campo del modelo elige la **puerta**, y cada puerta es un presupuesto indepen
 
 | Forma | Corre por | Presupuesto |
 |---|---|---|
-| `minimax-m3.1-flash` | `opencode run -m opencode-go/<id>` | plan Go |
+| `deepseek-v4.1-flash` | `opencode run -m opencode-go/<id>` | plan Go |
 | `opencode/<id>-free` | `opencode run` | gratis |
 | `<provider>/<id>` | `opencode run -m <ruta>` tal cual | el de ese proveedor |
 | `codex` / `codex:<m>` | `codex exec` | suscripción ChatGPT |
@@ -131,6 +131,11 @@ reintenta con backoff exponencial + jitter — gratis, porque el choque ocurre a
 modelo. Si agota los reintentos deja `.status=75`. Detalle completo en
 [`Bugs/sqlite-arranque-en-frio.md`](Bugs/sqlite-arranque-en-frio.md); regresión en
 `skills/cheap-fanout/test/`.
+
+**Saturación del proveedor.** Si un job termina con `Upstream request failed: [overloaded]` o
+`[prefill_cap_refused]` (DeepSeek, 2026-11-05), el dispatcher lo relanza dos veces con espera
+(10s, 20s + jitter) y, si persiste, deja `.status=76` para que lo mandes a otro modelo. Los
+timeouts no se reintentan.
 
 `bin/go-budget` te dice antes de lanzar cuánto llevas gastado de cada modelo contra sus tres
 ventanas, leyendo la base local de opencode:

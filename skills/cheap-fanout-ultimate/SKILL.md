@@ -97,7 +97,7 @@ un acuerdo ZDR solo hasta el 2026-11-30, y el resto del pool 0 días (`kimi-k3`,
    al vencer y deja `.status`=124, sin tocar al otro. Una respuesta frontier completa tarda 2-5 min
    normalmente (medido el 2026-11-05 con un paquete de ~700 palabras y respuesta de ≤800: Sol 60s, `kimi-k3` 61s, `gemini-4-argon` 62s, `gpt-6.1-terra` 23s, `kimi-k3.1-pro` 244s); NO improvises timeboxes de segundos, matarías asientos sanos. Asiento muerto o
    imparseable → el consejo **degrada** a lo que haya + tu postura; nunca bloquea, nunca se
-   reintenta dentro de la misma convocatoria. (La regla >5 min de K3 como pre-revisor NO aplica aquí:
+   reintenta dentro de la misma convocatoria. (La regla >5 min de K3 de `cheap-fanout` NO aplica aquí:
    son clases de job distintas con presupuestos de tiempo distintos — por eso el plazo va por
    línea y no como política global del helper.)
 4. **Arbitraje (tú, nunca un barato ni K3):** descompón cada respuesta en claims atómicos. Una
