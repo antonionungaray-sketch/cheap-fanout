@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# agy FALSO para las pruebas de cheap-fanout: sin red, sin cuota, sin cuenta de Google.
+#
+# Contrato (plan docs/superpowers/plans/2026-11-21-google-fanout.md, Tasks 1-4):
+#   agy models          → "Fetching available models..." + el contenido de $FAKE_AGY_MODELS
+#   agy -p /usage       → el contenido de $FAKE_AGY_USAGE, con exit ${FAKE_AGY_USAGE_RC:-0}
+#   agy -p /credits     → "Remaining credits<TAB>${FAKE_AGY_CREDITS:-0}"
+#   agy -p /config      → "useG1Credits<TAB>${FAKE_AGY_G1:-false}"
+#   agy -p <prompt> …   → el escenario que pida el token ESCENARIO=<x> del prompt
+# Cada invocación agrega una línea JSON a $FAKE_AGY_LOG (si está definido):
+#   {"cwd": <cwd>, "argv": [<args>], "ls": [<entradas del cwd>]}
+set -u
+
+if [ -n "${FAKE_AGY_LOG:-}" ]; then
+  python3 -I -c 'import json, os, sys
+print(json.dumps({"cwd": os.getcwd(), "argv": sys.argv[1:], "ls": sorted(os.listdir("."))},
+                 ensure_ascii=False))' "$@" >> "$FAKE_AGY_LOG"
+fi
+
+case "${1:-}" in
+  models)
+    echo "Fetching available models..."
+    [ -n "${FAKE_AGY_MODELS:-}" ] && cat "$FAKE_AGY_MODELS"
+    exit 0;;
+  -p|--print|--prompt) ;;
+  *) echo "fake-agy: invocación no soportada: $*" >&2; exit 98;;
+esac
+
+prompt="${2:-}"
+case "$prompt" in
+  /usage)   [ -n "${FAKE_AGY_USAGE:-}" ] && cat "$FAKE_AGY_USAGE"; exit "${FAKE_AGY_USAGE_RC:-0}";;
+  /credits) printf 'Remaining credits\t%s\n' "${FAKE_AGY_CREDITS:-0}"; exit 0;;
+  /config)  printf 'useG1Credits\t%s\n' "${FAKE_AGY_G1:-false}"; exit 0;;
+esac
+
+echo "fake-agy: escenario no implementado en este prompt" >&2
+exit 99

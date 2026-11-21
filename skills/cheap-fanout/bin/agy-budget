@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# agy-budget — cuánto queda de la cuota de Google Antigravity (el CLI `agy`), por bolsa y ventana.
+#
+# La cuota de Antigravity NO es en dólares. `agy -p "/usage"` (2 s, no llama a ningún modelo)
+# la reporta como % RESTANTE por bolsa y ventana, con la hora de reset en UTC. Verificado el
+# 2026-11-21 con una cuenta Google AI Pro:
+#     Gemini Models          Weekly Limit Remaining        99%  2026-11-28T18:48:17Z
+#     Gemini Models          Five Hour Limit Remaining     98%  2026-11-21T23:48:17Z
+#     Claude and GPT models  Weekly Limit Remaining        97%  2026-11-28T18:48:33Z
+#     Claude and GPT models  Five Hour Limit Remaining     94%  2026-11-21T23:48:33Z
+#     Gemini 4 Argon         Gemini 4 Argon Weekly Limit   99%  2026-11-28T18:48:33Z
+# Son DOS bolsas ("Gemini Models" y "Claude and GPT models"), cada una con ventana de 5 h y
+# semanal que arrancan con tu primer uso, más un límite semanal propio de Argon. La bolsa de
+# Claude/GPT es mucho más chica: ese día 5 jobs chicos le quitaron 6 puntos, y 16 jobs de Gemini
+# le quitaron 2 a la suya. Los porcentajes son enteros y llegan con retraso: sirven para decidir
+# si lanzar un lote, no para medir un job suelto.
+#
+# Al agotarse una bolsa, agy solo cobraría AI credits (dinero real) si `useG1Credits` está en
+# true; cheap-fanout lo fuerza a false en cada job, y este script te avisa si tu setting global
+# está encendido.
+#
+# Uso:
+#   agy-budget                 # las bolsas en sus ventanas, % usado y hora local de reset
+#   agy-budget --model <id>    # solo las bolsas de ESE modelo (el exit code también)
+#   agy-budget --tsv           # bolsa<TAB>ventana<TAB>restante_pct<TAB>reset_utc<TAB>reset_local
+#                              # (ventana: 5h, semana u otra; restante_pct sin %)
+#   agy-budget --quiet         # sin salida; solo el exit code
+#
+# Bolsas por modelo (--model):
+#   gemini-4-argon-* y gemini-pro-orchestrator-g1-pro → "Gemini Models" + "Gemini 4 Argon"
+#   cualquier otro gemini-*                         → "Gemini Models"
+#   claude-* y gpt-oss-*                            → "Claude and GPT models"
+#   otro id                                         → exit 3 (bolsa desconocida)
+#
+# Exit code:  0 = holgada (<80% usado en todas las ventanas relevantes)
+#             1 = apretada (≥80% usado en alguna)
+#             2 = agotada (0% restante en alguna): ese modelo no va a responder hasta el reset
+#             3 = no se pudo leer (falta agy, no hay sesión, /usage cambió de formato, id raro)
+set -uo pipefail
+
+MODEL=""; TSV=0; QUIET=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model)   MODEL="${2:-}"; shift 2;;
+    --tsv)     TSV=1; shift;;
+    --quiet|-q) QUIET=1; shift;;
+    -h|--help) awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit 0;;
+    *) echo "agy-budget: opción desconocida: $1" >&2; exit 3;;
+  esac
+done
+
+say() { [ "$QUIET" = 1 ] || echo "$@" >&2; }
+
+pools_for() { # imprime las bolsas de un modelo, una por línea; exit 1 si no tiene bolsa conocida
+  case "$1" in
+    gemini-4-argon-*|gemini-pro-orchestrator-g1-pro) printf 'Gemini Models\nGemini 4 Argon\n';;
+    gemini-*)                                        printf 'Gemini Models\n';;
+    claude-*|gpt-oss-*)                              printf 'Claude and GPT models\n';;
+    *) return 1;;
+  esac
+}
+
+POOLS=""
+if [ -n "$MODEL" ]; then
+  POOLS="$(pools_for "$MODEL")" || { say "agy-budget: '$MODEL' no tiene una bolsa conocida (gemini-*, claude-*, gpt-oss-*)"; exit 3; }
+fi
+
+command -v agy >/dev/null 2>&1 || { say "agy-budget: agy no está en PATH"; exit 3; }
+HAVE_TIMEOUT=0; command -v timeout >/dev/null 2>&1 && HAVE_TIMEOUT=1
+agy_cmd() { if [ "$HAVE_TIMEOUT" = 1 ]; then timeout 30 agy -p "$1" < /dev/null; else agy -p "$1" < /dev/null; fi; }
+
+raw="$(agy_cmd /usage 2>/dev/null)" || { say "agy-budget: 'agy -p /usage' falló (¿sin sesión? corre 'agy' una vez en modo interactivo)"; exit 3; }
+
+# filas válidas: exactamente 4 campos con TAB y el tercero como NN%
+rows=""
+while IFS=$'\t' read -r pool label pct reset extra; do
+  [[ "$pct" =~ ^[0-9]+%$ ]] || continue
+  [ -n "$pool" ] && [ -n "$label" ] && [ -n "$reset" ] && [ -z "${extra:-}" ] || continue
+  if [ -n "$POOLS" ] && ! printf '%s\n' "$POOLS" | grep -qxF "$pool"; then continue; fi
+  case "$label" in
+    *"Five Hour"*) win=5h;;
+    *Weekly*)      win=semana;;
+    *)             win=otra;;
+  esac
+  local_t="$(date -d "$reset" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || printf '%s' "$reset")"
+  rows="${rows}${pool}"$'\t'"${win}"$'\t'"${pct%\%}"$'\t'"${reset}"$'\t'"${local_t}"$'\n'
+done <<< "$raw"
+
+if [ -z "$rows" ]; then
+  say "agy-budget: /usage no trajo filas reconocibles${MODEL:+ para $MODEL} (¿cambió el formato de agy?)"
+  exit 3
+fi
+
+# peor ventana relevante
+status=0
+while IFS=$'\t' read -r pool win rest reset local_t; do
+  [ -n "$pool" ] || continue
+  if [ "$rest" -eq 0 ]; then status=2
+  elif [ "$rest" -le 20 ] && [ "$status" -lt 1 ]; then status=1; fi
+done <<< "$rows"
+
+if [ "$QUIET" = 1 ]; then exit "$status"; fi
+if [ "$TSV" = 1 ]; then printf '%s' "$rows"; exit "$status"; fi
+
+echo "Cuota de Google Antigravity (agy -p /usage)${MODEL:+ — bolsas de $MODEL}"
+printf '%-24s %-7s %6s   %s\n' "bolsa" "ventana" "usado" "se resetea"
+while IFS=$'\t' read -r pool win rest reset local_t; do
+  [ -n "$pool" ] || continue
+  printf '%-24s %-7s %5s%%   %s\n' "$pool" "$win" "$((100 - rest))" "$local_t"
+done <<< "$rows"
+echo
+
+credits="$(agy_cmd /credits 2>/dev/null | awk -F'\t' '$1 == "Remaining credits" { print $2; exit }')"
+echo "Créditos de IA: ${credits:-desconocido}"
+if agy_cmd /config 2>/dev/null | awk -F'\t' '$1 == "useG1Credits" && $2 == "true" { f = 1 } END { exit f ? 0 : 1 }'; then
+  echo "⚠ useG1Credits está en true: al agotarse una bolsa, agy cobraría AI credits (dinero real)."
+  echo "  cheap-fanout lo fuerza a false en cada job; apágalo también en /config para tus sesiones a mano."
+fi
+case "$status" in
+  1) echo "Estado: APRETADA — alguna ventana va en 80% o más.";;
+  2) echo "Estado: AGOTADA — espera el reset de la ventana en 0% o manda el trabajo a otra puerta.";;
+esac
+echo "Ojo: agy da porcentajes enteros y con retraso; no sirven para medir un job suelto."
+exit "$status"
