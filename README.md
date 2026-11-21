@@ -82,7 +82,7 @@ Un `jobs.tsv` separado por TABs, un job por línea:
 ```
 deepseek-v4.1-flash	p01.md	o01.out	2m
 claude-haiku-5-5	p02.md	o02.out	5m
-codex:gpt-6.1-terra	p03.md	o03.out	4m
+codex:gpt-6.2-sol	p03.md	o03.out	4m
 ```
 
 ```bash
@@ -94,7 +94,7 @@ El campo del modelo elige la **puerta**, y cada puerta es un presupuesto indepen
 | Forma | Corre por | Presupuesto |
 |---|---|---|
 | `deepseek-v4.1-flash` | `opencode run -m opencode-go/<id>` | plan Go |
-| `opencode/<id>-free` | `opencode run` | gratis |
+| `hy4-flash-free` · `opencode/<id>-free` | `opencode run` | gratis (tope diario) |
 | `<provider>/<id>` | `opencode run -m <ruta>` tal cual | el de ese proveedor |
 | `codex` / `codex:<m>` | `codex exec` | suscripción ChatGPT |
 
@@ -107,17 +107,18 @@ Cada job deja `salida.out`, más `.status` (exit code), `.gate` (qué modelo lo 
 Al vencer manda SIGTERM y, 15s después, SIGKILL; el `.status` queda en 124 y el resumen lo reporta.
 Sin esto, un agente colgado bloquea el `wait` final para siempre.
 
-**La cuota se mide por modelo y el dispatcher no decide por ti.** Desde 2026-10-01 el plan Go
-limita por **dólares y por modelo**: cada uno trae un límite mensual (100, 60, 30, 20 o 15 USD en el plan
-Go de 10 USD) del que salen sus ventanas de 5 horas (20%), semana (50%) y mes (100%); la doc ya no
-menciona un pozo global. Agotar un modelo no agota a los demás. Al detectar el error de cuota, el
-dispatcher **no** sustituye el modelo —es una decisión de calidad y es del orquestador— y deja
-`.status=77`. Su rescate automático en el gemelo `opencode/<id>-free` está **apagado**: cuando se decidió, la
-doc de Zen avisaba que esos gemelos "may use collected data to improve the model", el mismo motivo
-por el que `muse-spark` está vetado. Desde 2026-11-05 `glm-5.3-flash-free` y
-`deepseek-v4.1-flash-free` ya no entrenan; habilitarlos en el helper queda pendiente de confirmación
-(`CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1` reactiva el rescate para cualquier gemelo, solo con material
-público).
+**La cuota es una bolsa compartida y el dispatcher no decide por ti.** Desde la doc del 2026-11-20
+el plan Go tiene **una sola bolsa** para todos los modelos de pago: cada dólar gastado en un modelo
+consume 1/límite de la bolsa mensual (límites de 100, 60, 30, 20 o 15 USD según el modelo), con
+ventanas de 5 horas (20%), semana (50%) y mes (100%). Agotarla bloquea a todos los modelos de pago:
+cambiar de modelo ya no consigue presupuesto. Al detectar el error de cuota, el dispatcher **no**
+sustituye el modelo —es una decisión de calidad y es del orquestador— y deja `.status=77`. Su rescate
+automático en el gemelo `opencode/<id>-free` está **apagado**: cuando se decidió, la doc de Zen
+avisaba que esos gemelos "may use collected data to improve the model", el mismo motivo por el que
+`muse-spark` está vetado. Al 2026-11-20 `deepseek-v4.1-flash-free` no entrena (y `hy4-flash-free` es
+un gratuito sin entrenamiento dentro de Go); habilitar el rescate en el helper queda pendiente de
+confirmación (`CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1` lo reactiva para cualquier gemelo, solo con
+material público).
 
 **La carrera de arranque de SQLite no te alcanza.** Varios `opencode` arrancando a la vez contra
 una base **fría** se pelean por crearla y migrarla: el perdedor muere con `database is locked` (o
@@ -137,20 +138,26 @@ modelo. Si agota los reintentos deja `.status=75`. Detalle completo en
 (10s, 20s + jitter) y, si persiste, deja `.status=76` para que lo mandes a otro modelo. Los
 timeouts no se reintentan.
 
-`bin/go-budget` te dice antes de lanzar cuánto llevas gastado de cada modelo contra sus tres
-ventanas, leyendo la base local de opencode:
+`bin/go-budget` te dice antes de lanzar cuánto llevas usado de la bolsa en sus tres ventanas y qué
+modelo se la está comiendo, leyendo la base local de opencode y los límites vigentes del endpoint
+de Go:
 
 ```
-modelo                           30d gastado límite    30d     7d     5h
-kimi-k3                             $0.5414     $15     4%     7%    18% █
-hy3                                 $0.4164     $60     1%     0%     0%
-deepseek-v4-flash                   $0.4027     $30     1%     1%     1%
-glm-5.3-flash                       $0.1559     $60     0%     1%     1%
+Bolsa compartida del plan Go (límites: endpoint de Go)
+ventana                         usado        USD
+5h (20% del mes)                   4%    $0.2781
+semana (desde lun 00 UTC)         10%    $1.4174 █
+mes (30d corridos)                46%   $10.6134 ████
+
+modelo                          gasto mes límite     mes  semana      5h
+kimi-k3                           $2.4359     $15   16.2%    0.0%    0.0%
+minimax-m3.1-flash                $1.7639     $20    8.8%    6.6%    0.3%
+deepseek-v4.1-flash               $2.0793    $100    2.1%    0.8%    0.0%
 ```
 
-Esa tabla es la que decide qué hacer ante un `.status=77`: cada modelo tiene su propio carril, así
-que otro modelo Go todavía tiene presupuesto (`GO_PLUS=1` lo compara contra los límites del plan
-de 40 USD).
+Esa tabla es la que decide qué hacer ante un `.status=77`: si la bolsa se agotó, el job va a un
+gratuito que no entrene o a `codex` (`GO_PLUS=1` y `GO_TEAMS=1` comparan contra los otros planes;
+`GO_PERIOD_DAY=<día>` ajusta el mes a tu fecha de renovación).
 
 ## El invariante
 

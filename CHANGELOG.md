@@ -4,6 +4,70 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). L
 `.claude-plugin/plugin.json`. Para la evidencia detrás de cada cambio, ver los documentos de
 hallazgos en [`Bugs/`](Bugs/).
 
+## [1.6.0] — 2026-11-20
+
+Evidencia completa: [`Bugs/hallazgos-2026-11-20.md`](Bugs/hallazgos-2026-11-20.md).
+
+> **Estado del release:** publicado el 2026-11-20. Relectura de fuentes, mediciones y cambios de
+> Claude Fable 5.2, que también revisó el resultado (tests locales y dos lotes reales). Sin revisión de otro modelo frontier. **Una cosa sin verificar:** el esquema de
+> bolsa compartida sale del texto de la doc; no se contrastó con la barra de la consola.
+
+### ⚠ Antes de actualizar: cambios de comportamiento
+
+1. **La cuota de Go es una bolsa compartida.** La doc del 2026-11-20 dice que todos los modelos de
+   pago gastan de una sola bolsa y que el límite de cada modelo es el **peso** de sus dólares
+   (1.50 USD en un modelo de 15 = 10% del mes). "Cambiar de modelo siempre consigue presupuesto" deja
+   de ser cierto: al agotarse, las salidas son un gratuito que no entrene o `codex:*`.
+2. **`go-budget` se reescribió para medir esa bolsa.** Muestra el % usado en 5h, semana (desde el
+   lunes 00:00 UTC, como dice la doc) y mes, y cuántos puntos aporta cada modelo. Lee los límites
+   **en vivo del endpoint de Go** (caché de 24 h; tabla de respaldo sin red o con
+   `GO_BUDGET_OFFLINE=1`), así que promociones como la de `glm-5.3` se reflejan solas.
+   `GO_PERIOD_DAY=<día>` ajusta el mes a la fecha de renovación. **Exit codes:** `1` = bolsa ≥80% en
+   una ventana; `2` = bolsa agotada (antes: "el `--model` pedido se agotó"). `--tsv` conserva la forma
+   pero la 3ª columna de las filas de ventana ahora dice `bolsa` y los % son de la bolsa.
+3. **El casi-frontier pasa a `codex:gpt-6.2-sol`** (II 57; 17-180 mensajes/5h en Plus) y, para la
+   unidad más dura o el lote crítico, **`codex:gpt-6.2-astra`** (II 62, por encima de Opus 5.5).
+   `gpt-6.1-sol` y `gpt-6-astra` quedan dominados en índice y en cuota. `gpt-6.2-terra` no existe con
+   cuenta ChatGPT: la pre-revisión rápida sigue en `codex:gpt-6.1-terra`.
+4. **`gemini-4-argon` sale de la lista de material sensible**: la doc ahora dice que retiene hasta 55
+   días (antes 0), y su precio se duplica el 2026-12-01. El pre-revisor para material sensible pasa a
+   `qwen4-max` o `hy4-flash-free`.
+5. **Semi-quirúrgico por Go: `qwen4-max`** (nuevo; II 43, 1.50/4.50, 463 req/5h, 0 días) en lugar de
+   `kimi-k3.1-pro` (II 46, pero más caro, un tercio de las solicitudes y se colgó como pre-revisor).
+6. **Ancho a costo cero: `hy4-flash-free`** (nuevo; no entrena, 0 días; 17-19s, 31/31) y
+   `opencode/deepseek-v4.1-flash-free` (9-19s, 31/31). `opencode/glm-5.3-flash-free` murió el
+   2026-11-18. El rescate automático del helper sigue apagado (pendiente de OK).
+7. **`deepseek-v4.1-flash` sigue de default del ancho y de pre-revisor**: 14-17s, 31/31 y el menor
+   peso del pool (0.0045% de la bolsa por extracción; `minimax-m3.1-flash` 0.027%, `qwen4-max` 0.44%).
+   El respaldo de pago pasa de `minimax-m3.1-flash` a `glm-5.3-flash` (pesa un tercio).
+
+### Mediciones del 2026-11-20
+
+- **Extracción** (31 filas con cita, 26 corridas, 6 simultáneas): DeepSeek 14/17s · Luna 12/17 · Haiku
+  15/17 · `hy4-flash-free` 17/19 · minimax 17/24 · `glm-5.3-flash` 18/20 · gemelo free de DeepSeek
+  9/19 · `hy3` 24/30 · `glm-5.3` 34/34 · `longcat-2.5-free` 47 · `qwen4-max` 62 · `qwen3.8-flash`
+  62/64 · `hy4` 53/81 · `mimo-v2.6-flash` 77/83. Todas 31/31 salvo una de Haiku (30/31).
+- **Pre-revisión** (8 unidades, 6 con fallas sembradas que exigían abrir la fuente): los 9 candidatos
+  acertaron las 8, sin falsas alarmas. Terra 17s · Luna 39 · `hy4-flash-free` 44 · Astra 6.2 48 ·
+  minimax 52 · Sol 6.2 61 · DeepSeek 91 · Qwen4 Max 98 · Argon 103. No discrimina calidad.
+- **AA v5.0.1** (sin cambio de versión): Fable 5.2 = 65, GPT-6.2 Astra 62, Opus 5.5 59, GPT-6.2 Sol 57,
+  Sonnet 5.5 55, GPT-6.1 Terra 51, Argon 50, K3.1 Pro 46, Qwen4 Max 43.
+
+### Por archivo
+
+- `skills/cheap-fanout/SKILL.md`: roles, flujo (fuentes de verdad), ruteo por caso con peso en la
+  bolsa, pre-revisión (cuarto lote y regla), unidad difícil, catálogo, privacidad, gratuitos, *Cuota
+  Go* (reescrita), *Codex CLI*, guardrails de K3, reglas de oro 5 y 10.
+- `skills/cheap-fanout/bin/go-budget`: reescrito (bolsa compartida, límites en vivo, semana
+  calendario, `GO_PERIOD_DAY`, `GO_BUDGET_OFFLINE`).
+- `skills/cheap-fanout/bin/cheap-fanout`: solo textos (cabecera, mensaje de veto y de `.status=77`).
+  Sin cambios de lógica; `SAFE_FREE_TWINS` sigue vacío. Tests: 27/27.
+- `skills/cheap-fanout/reference/catalogo-go.md` (tabla y lote nuevos; lo anterior queda como
+  histórico), `reference/codex.md` (bloque GPT-6.2), `reference/troubleshooting.md`.
+- `skills/cheap-fanout-ultimate/SKILL.md`: asiento GPT en `codex:gpt-6.2-sol` (con `gpt-6.2-astra`
+  como opción de máxima potencia), retención de Argon, `qwen4-max` como sustituto, bolsa compartida.
+- `README.md`, `PORTABLE-SPEC.md` (aviso), `.claude-plugin/*.json` (1.6.0).
+
 ## [1.5.0] — 2026-11-06
 
 Evidencia completa: [`Bugs/hallazgos-2026-11-06.md`](Bugs/hallazgos-2026-11-06.md).

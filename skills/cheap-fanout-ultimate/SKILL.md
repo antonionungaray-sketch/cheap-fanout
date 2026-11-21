@@ -27,31 +27,31 @@ Funciona con o sin fan-out previo: también sobre un diagnóstico/solución suel
 
 | Asiento | Vía | Presupuesto |
 |---|---|---|
-| GPT Sol | `codex:gpt-6.1-sol` en jobs.tsv (II 50-55, AA v5.0.1; exige Codex ≥ 0.159.1, aquí 0.166.0). Con un Codex anterior: `codex:gpt-6-astra` | ChatGPT (≈1-2 msgs de la ventana: 15-160 por 5h en Plus con 6.1 Sol, 5-45 con Astra; si la sesión ya necesita codex como desborde de Go, contémplalo). Medido el 2026-11-05: 60s, causa correcta pero cautelosa |
-| Kimi K3 | `kimi-k3` en jobs.tsv, **por Go**. La suscripción directa Allegretto (`kimi-code-plan-cn/k3`) está **pausada desde el 2026-11-05**: no la uses | Cuota **Go** del modelo (110 req/5h, límite de 15 USD ⇒ ~490 requests al mes) — **cuenta como 1 de las 1-2 unidades quirúrgicas K3 de la sesión**. Medido el 2026-11-05: 61s y mecanismo completo. Dale plazo `8m` igualmente |
+| GPT Sol | `codex:gpt-6.2-sol` en jobs.tsv (II 57, AA v5.0.1 a esfuerzo máx.; antes `gpt-6.1-sol`, II 50-55). **Si la decisión amerita el modelo más fuerte disponible fuera de Anthropic: `codex:gpt-6.2-astra`** (II 62, por encima de Opus 5.5; cuota más corta) | ChatGPT (≈1-2 msgs de la ventana: 17-180 por 5h en Plus con 6.2 Sol, 6-50 con 6.2 Astra; si la sesión ya necesita codex como desborde de Go, contémplalo). Medido el 2026-11-05 con 6.1 Sol: 60s, causa correcta pero cautelosa. 6.2 Sol y 6.2 Astra solo se probaron el 2026-11-20 en una pre-revisión (61s y 48s, 8/8), no en un consejo |
+| Kimi K3 | `kimi-k3` en jobs.tsv, **por Go**. La suscripción directa Allegretto (`kimi-code-plan-cn/k3`) está **pausada desde el 2026-11-05**: no la uses | **Bolsa compartida de Go** (98 req/5h estimados; 3/15 por millón con límite 15: un asiento de ~0.19 USD gasta ~1.3% de la bolsa del mes, que también paga el ancho) — **cuenta como 1 de las 1-2 unidades quirúrgicas K3 de la sesión**. Medido el 2026-11-05: 61s y mecanismo completo. Dale plazo `8m` igualmente |
 | Orquestador (tú) | Tu postura escrita ANTES de lanzar (paso 1) | La sesión misma |
 
 **No hay asiento `claude -p` fresco:** comparte pesos y priors contigo (serían ~2.2 opiniones
 independientes, no 3) y quema la misma cuota Max del orquestador. Solo se evalúa en v2 si el log
 muestra juez-y-parte (ver kill criteria).
 
-**Nota de asiento Sol:** `codex:gpt-6.1-sol` fuerza el modelo con `-m`. Un job `codex` pelado usa
-el default de `~/.codex/config.toml` (hoy `gpt-6-luna` con esfuerzo high, el más barato de la cuota;
-el 2026-10-01 era `gpt-6-astra`), que NO es Sol — siempre escribe el sufijo. `gpt-6.1-sol` exige
-Codex ≥ 0.159.1 (con 0.157.1 daba "not supported when using Codex with a ChatGPT account"); aquí
-Codex está en 0.166.0 y `codex:gpt-6.1-sol` responde (verificado 2026-11-05). En una máquina con un
-Codex anterior, el asiento va con `codex:gpt-6-astra`. El paquete del consejo viaja en el prompt, no
+**Nota de asiento Sol:** `codex:gpt-6.2-sol` fuerza el modelo con `-m`. Un job `codex` pelado usa
+el default de `~/.codex/config.toml` (hoy `gpt-6-astra` con esfuerzo high; el 2026-11-05 era
+`gpt-6-luna`: cambia seguido), que NO es Sol — siempre escribe el sufijo. Aquí Codex está en 0.167.0
+y `codex:gpt-6.2-sol` y `codex:gpt-6.2-astra` responden (verificado 2026-11-20); no probé desde qué
+versión. Si un Codex anterior da "not supported when using Codex with a ChatGPT account", el asiento
+va con `codex:gpt-6.1-sol` (≥ 0.159.1) o `codex:gpt-6-astra`. El paquete del consejo viaja en el prompt, no
 como archivo, así que no depende del sandbox de codex (que aquí funciona: perfil de AppArmor de bwrap
 cargado, reverificado el 2026-11-05).
 
 **Kimi directo (Allegretto) está pausado desde el 2026-11-05: el asiento Kimi va por Go (`kimi-k3`).**
-Si `kimi-k3` se queda sin cuota (su límite de 15 USD es propio), el sustituto que conserva al lab es
-`kimi-k3.1-pro` (otro modelo, límite propio, II 46): dio el mismo mecanismo completo en la prueba pero
+Si `kimi-k3` falla, el sustituto que conserva al lab es `kimi-k3.1-pro` (II 46; ojo: desde el
+2026-11-20 Go tiene una sola bolsa, así que si lo que se agotó fue la cuota tampoco responderá): dio el mismo mecanismo completo en la prueba pero
 tardó **244s**, así que cabe en el plazo de `8m` pero no esperes rapidez. Si Kimi falla por completo,
-el sustituto tiene que ser de **OTRO lab**: `opencode-go/gemini-4-argon` (Google; II 50; 440 req/5h; 0
-días de retención; 62s y mecanismo completo en la prueba; su 50% de descuento vence el 2026-11-30),
-`opencode-go/glm-5.3` (Zhipu; II 23-32; 220 req/5h) u `opencode-go/qwen3.8-max` (Alibaba; II 34; 160
-req/5h). **No sustituyas con `gpt-6.1-terra` ni con otro modelo de OpenAI** (ya hay un asiento OpenAI:
+el sustituto tiene que ser de **OTRO lab**: `opencode-go/gemini-4-argon` (Google; II 50; 566 req/5h; 62s y mecanismo completo en la prueba;
+**retiene hasta 55 días** desde la doc del 2026-11-20 y su precio se duplica el 2026-12-01),
+`opencode-go/qwen4-max` (Alibaba; **nuevo**; II 43; 463 req/5h; 0 días de retención; sin probar como
+asiento) u `opencode-go/glm-5.3` (Zhipu; II 23-32). **No sustituyas con `gpt-6.1-terra` ni con otro modelo de OpenAI** (ya hay un asiento OpenAI:
 Sol; y Terra dio solo 3 de 6 términos de la causa) ni con DeepSeek. **`grok-4.6` y `grok-4.7` no son
 opción: están fuera** (ver *Modelos vetados* en el skill cheap-fanout), y el helper rechaza el lote
 entero si aparecen. Anótalo en el log: un consejo con asiento sustituto no es comparable con uno
@@ -59,12 +59,12 @@ normal.
 
 **Privacidad de los asientos — el paquete del consejo lleva el problema completo.** Ya está la
 regla de no mandar datos identificables del cliente; súmale la del lado del modelo (tabla de
-`opencode.ai/docs/go`, leída 2026-11-05). Están **vetados de raíz** y el helper los rechaza en
+`opencode.ai/docs/go`, leída 2026-11-20). Están **vetados de raíz** y el helper los rechaza en
 pre-vuelo: `muse-spark-1.2-contributor`, `muse-spark-1.3-contributor` e `iceman-contributor-free`
 (entrenan con tus datos, no son ZDR), `grok-4.6` y `grok-4.7` — jamás como asiento ni para nada de este flujo. De los que
-quedan, `gpt-6-luna`, `gpt-5.6-luna`, `claude-haiku-5-5` y `beam-free` retienen 30 días, DeepSeek tiene
-un acuerdo ZDR solo hasta el 2026-11-30, y el resto del pool 0 días (`kimi-k3`, `kimi-k3.1-pro`,
-`gemini-4-argon` y `glm-5.3` incluidos). Si el paquete toca material sensible, el consejo va por codex
+quedan, `gpt-6-luna`, `gpt-5.6-luna`, `claude-haiku-5-5` y `beam-free` retienen 30 días, **`gemini-4-argon`
+hasta 55**, DeepSeek tiene un acuerdo ZDR solo hasta el 2026-11-30, y el resto del pool 0 días
+(`kimi-k3`, `kimi-k3.1-pro`, `qwen4-max` y `glm-5.3` incluidos). Si el paquete toca material sensible, el consejo va por codex
 (suscripción tuya) + un asiento Go de 0 días de retención (`kimi-k3`), nunca por un modelo de 30 días.
 
 ## Flujo
@@ -83,7 +83,7 @@ un acuerdo ZDR solo hasta el 2026-11-30, y el resto del pool 0 días (`kimi-k3`,
    modelo, prompt, salida, plazo — sin columna de etiqueta; no inventes `--jobs`):
 
    ```
-   codex:gpt-6.1-sol	consejo-paquete.md	consejo-sol.out	8m
+   codex:gpt-6.2-sol	consejo-paquete.md	consejo-sol.out	8m
    kimi-k3	consejo-paquete.md	consejo-k3.out	8m
    ```
    ```bash
@@ -179,12 +179,12 @@ máx 800 palabras, densidad sobre extensión.
 
 | Síntoma | Arreglo |
 |---|---|
-| `gpt-6.1-sol` da "not supported when using Codex with a ChatGPT account" | Tu Codex es anterior a 0.159.1: actualiza (`npm i -g @openai/codex@latest`; hoy es la 0.166.0) o usa `codex:gpt-6-astra` mientras tanto. Verificado el 2026-10-01 en 0.157.1: `gpt-6-astra`, `gpt-6-sol` y `gpt-6-luna` responden |
+| `gpt-6.2-sol` da "not supported when using Codex with a ChatGPT account" | Tu Codex no conoce el modelo: actualiza (`npm i -g @openai/codex@latest`; aquí responde con 0.167.0) o usa `codex:gpt-6.1-sol` (≥ 0.159.1) o `codex:gpt-6-astra` mientras tanto. `gpt-6.2-terra` da el mismo error porque no existe para cuentas ChatGPT |
 | Asiento K3 >8 min | El helper ya lo mató (`.status`=124). Consejo degrada a Sol + tu postura. Anota el timeout en el log |
 | Asiento Kimi falla al instante con `Your current subscription does not have access to Kimi Code right now` | Usaste la ruta directa pausada (`kimi-code-plan-cn/*`). Cámbiala a `kimi-k3` (Go). Si el fallo es `UnknownError` con `opencode-go/kimi-k3`, prueba `opencode run -m opencode-go/kimi-k3 "Responde exactamente: PONG"` y `go-budget --model kimi-k3` |
-| `kimi-k3` caído o sin cuota en Go | Prueba `kimi-k3.1-pro` (mismo lab, límite propio, ~4 min). Si Kimi falla por completo: un frontier de OTRO lab (`opencode-go/gemini-4-argon`, `opencode-go/glm-5.3`, `opencode-go/qwen3.8-max`); nunca por DeepSeek, `gpt-6.1-terra` ni `grok-4.6`/`grok-4.7`, que están fuera. Anota la sustitución en el log |
-| Asiento Go rebotado por cuota | Corre `go-budget`: cada modelo tiene su propio límite mensual (15 USD para `kimi-k3`, `kimi-k3.1-pro`, `qwen3.8-max` y `glm-5.3`; 30 USD `gemini-4-argon`; ya no hay pozo global), así que otro modelo Go tiene presupuesto; si ese también falla, el consejo degrada a codex + tu postura |
-| `cheap-fanout: MODELO VETADO` al lanzar los asientos | Un asiento apunta a `muse-spark-1.x-contributor`, `iceman-contributor-free` o `grok-4.6`/`grok-4.7`. No uses el override: cámbialo por `gemini-4-argon` o `glm-5.3` |
+| `kimi-k3` caído o sin cuota en Go | Si está caído, prueba `kimi-k3.1-pro` (mismo lab, ~4 min); si es cuota, la bolsa de Go es una sola y ningún modelo de pago responderá (fila siguiente). Si Kimi falla por completo: un frontier de OTRO lab (`opencode-go/gemini-4-argon`, `opencode-go/qwen4-max`, `opencode-go/glm-5.3`); nunca por DeepSeek, `gpt-6.1-terra` ni `grok-4.6`/`grok-4.7`, que están fuera. Anota la sustitución en el log |
+| Asiento Go rebotado por cuota | Corre `go-budget`: desde la doc del 2026-11-20 todos los modelos de pago de Go gastan de **una bolsa compartida** (cada dólar pesa 1/límite del modelo), así que cambiar a otro modelo Go de pago no ayuda. El consejo degrada a codex + tu postura; la ventana de 5h se libera sola |
+| `cheap-fanout: MODELO VETADO` al lanzar los asientos | Un asiento apunta a `muse-spark-1.x-contributor`, `iceman-contributor-free` o `grok-4.6`/`grok-4.7`. No uses el override: cámbialo por `qwen4-max`, `gemini-4-argon` o `glm-5.3` |
 | `consejo-sol.out` vacío pero status=0 | Mira `consejo-sol.out.log`: el helper vuelca ahí la traza de codex |
 | Sol devuelve dato factual sin fuente | No lo adoptes sin verificar en primaria (Sol no tiene web) |
 | Los dos asientos coinciden en todo | Sospecha prior compartido; verifica el claim central en primaria antes de celebrarlo. Anota "sin desacuerdo" en el log |

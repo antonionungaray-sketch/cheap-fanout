@@ -40,29 +40,31 @@ prompts al usuario para que él los corra a mano. (Si en esta máquina existe un
 
 | Nivel | Quién | Hace | Nunca hace |
 |---|---|---|---|
-| **Orquestador** | Claude/tú (frontier: Opus 5.5 = II 59, Sonnet 5.5 = 55, Fable 5.1 = 49; AA v5.0.1, esfuerzo máx.) | Descompone, rutea, **spot-check**, veredicto y síntesis **final** | El ancho; re-revisar lo ya limpio |
-| **Subteniente** | `deepseek-v4.1-flash` (el que menos pesa contra su límite; 100s, 7/7 el 2026-11-06) y, en lotes de alto impacto, `codex:gpt-6.1-terra` en paralelo (II 42-51, 30s, cuota ChatGPT); `codex:gpt-6.1-sol` si el impacto es muy alto, `gemini-4-argon` si el material es sensible | Pre-revisa el lote entero en 1 request (1M ctx); borrador de síntesis; cruza unidades | El ancho; planear/rutear; la unidad difícil ordinaria (ésa va a `claude-haiku-5-5`) |
-| **Casi-frontier** | `codex:gpt-6.1-sol` (II 50-55; suscripción ChatGPT) y, sin Codex, `gemini-4-argon` (II 50; Go) | 1-2 unidades quirúrgicas por sesión | El ancho |
-| **Ejecutores** | `deepseek-v4.1-flash` (default), `minimax-m3.1-flash`, `glm-5.3-flash`, `gpt-6-luna`… (Go) y `codex:gpt-6-luna` (Codex CLI) | El ancho: N unidades en paralelo | Decidir o preguntar nada |
+| **Orquestador** | Claude/tú (frontier: Fable 5.2 = II 65, Opus 5.5 = 59, Sonnet 5.5 = 55; AA v5.0.1, esfuerzo máx.) | Descompone, rutea, **spot-check**, veredicto y síntesis **final** | El ancho; re-revisar lo ya limpio |
+| **Subteniente** | `deepseek-v4.1-flash` (el que menos pesa en la bolsa de Go; 91s, 8/8 el 2026-11-20; `hy4-flash-free` lo hace gratis en 44s) y, en lotes de alto impacto, `codex:gpt-6.1-terra` en paralelo (II 51, 17s, cuota ChatGPT); `codex:gpt-6.2-sol` (II 57) si el impacto es muy alto y `codex:gpt-6.2-astra` (II 62) si es crítico; `qwen4-max` o `hy4-flash-free` si el material es sensible | Pre-revisa el lote entero en 1 request (1M ctx); borrador de síntesis; cruza unidades | El ancho; planear/rutear; la unidad difícil ordinaria (ésa va a `claude-haiku-5-5`) |
+| **Casi-frontier** | `codex:gpt-6.2-sol` (II 57) y, para la unidad más dura, `codex:gpt-6.2-astra` (II 62; suscripción ChatGPT); sin Codex, `gemini-4-argon` (II 50) o `qwen4-max` (II 43; 0 días de retención), ambos por Go | 1-2 unidades quirúrgicas por sesión | El ancho |
+| **Ejecutores** | `deepseek-v4.1-flash` (default), `hy4-flash-free` y `opencode/deepseek-v4.1-flash-free` (gratis, sin entrenamiento), `glm-5.3-flash`, `minimax-m3.1-flash`, `gpt-6-luna`… (Go) y `codex:gpt-6-luna` (Codex CLI) | El ancho: N unidades en paralelo | Decidir o preguntar nada |
 
 ## Flujo (6 pasos)
 
 1. **Descomponer** en N unidades independientes. Ownership disjunto: dos jobs nunca tocan el mismo archivo.
 2. **Rutear** cada unidad al mejor modelo barato (tabla abajo — decide TÚ, no un router LLM).
    La tabla de este archivo es la referencia de ruteo, pero **caduca**: la fuente de verdad de
-   precios, cuotas y **topes por modelo** es `opencode.ai/docs/go`. Si vas a rutear por precio en
+   las reglas del plan es `opencode.ai/docs/go`, y la de precios, solicitudes estimadas y **límite
+   por modelo** es la página `opencode.ai/console/go` (la doc ya no trae esa tabla desde el
+   2026-11-20) y el endpoint de abajo. Si vas a rutear por precio en
    una decisión cara, o si un número te parece raro, reléela ahí (y no la confundas con
    `opencode.ai/docs/zen`, que cotiza los mismos modelos a precio de pago-por-uso). Lo que el
    proveedor sirve hoy **no** te lo dice `opencode models` de forma confiable —esa lista viene
    desfasada—: la lista autoritativa de lo que Go sirve es el endpoint público
-   `curl https://opencode.ai/inference/go/v1/models` (sin llave; 29 ids el 2026-11-05) y la prueba
+   `curl https://opencode.ai/inference/go/v1/models` (sin llave; 31 ids el 2026-11-20; trae además el límite mensual de cada modelo en `go.monthly_usage`) y la prueba
    final sigue siendo `opencode run -m <ruta> "Responde exactamente: PONG"` (la tabla de la doc aún
    lista modelos que responden `has been deprecated`).
 3. **Disparar en paralelo** con `bin/cheap-fanout` (prompts autocontenidos + jobs.tsv).
    Para ediciones que escriben, corre cada job en un git worktree aislado o usa `--dir`.
 4. **Recolectar** los `out_file` (revisa siempre `out_file.status`; 0 = OK).
 5. **Pre-revisión** (lotes ≥3): un job `deepseek-v4.1-flash` —y, si el lote es de alto impacto,
-   otro `codex:gpt-6.1-terra` en paralelo— recibe, **por referencia**, no
+   otro `codex:gpt-6.1-terra` en paralelo (`codex:gpt-6.2-sol` si es muy alto)— recibe, **por referencia**, no
    concatenados, las rutas de los pares prompt→`.out` y los lee con sus propias herramientas de
    archivo desde el cwd, y devuelve veredicto por unidad + datos de alto impacto + borrador de
    síntesis (plantilla abajo). Con 1-2 unidades, sáltatelo y revisa directo.
@@ -117,9 +119,9 @@ B=~/.claude/skills/cheap-fanout/bin/cheap-fanout
 "$B" --timeout 3m jobs.tsv                        # cambia el plazo default del lote
 ~/.claude/skills/cheap-fanout/bin/go-budget   # gasto por modelo en sus tres ventanas (5h/7d/30d)
 ```
-- El `<model>` admite tres formas (verificadas 2026-11-05):
+- El `<model>` admite tres formas (verificadas 2026-11-20):
   - `deepseek-v4.1-flash` — sin prefijo ⇒ el helper le pone `opencode-go/` (plan Go).
-  - `opencode/glm-5.3-flash-free` — cualquier ruta `<provider>/<id>` de opencode pasa **tal
+  - `opencode/deepseek-v4.1-flash-free` — cualquier ruta `<provider>/<id>` de opencode pasa **tal
     cual** (aquí, un gemelo gratuito de Zen; ver *Modelos gratuitos*). Las rutas de Kimi directo
     (`kimi-code-plan-cn/*`, suscripción Moonshot) están **pausadas** desde el 2026-11-05: no las
     rutees; K3 va por Go (`kimi-k3`). El helper aún traduce `kimi-for-coding/*` por si se reactiva.
@@ -192,124 +194,144 @@ gratis, ~75s por request ⇒ plazo `8m` y `--parallel 4`; la key va literal en e
 temporal y **nunca** en el repo ni en este archivo). URL exacta, manejo de la key, números medidos
 y lo que NO entra por esta puerta: `reference/bloqueo-bots.md`.
 
-## Ruteo por caso — modelos verificados (OpenCode Go; releído 2026-11-05)
+## Ruteo por caso — modelos verificados (OpenCode Go; releído 2026-11-20)
 
-Precios en USD por 1M tokens (input/output). Cuota Go en requests por ventana de 5h. **`límite`** =
-los dólares mensuales que ESE modelo puede consumir del plan; de él salen sus tres ventanas (ver
-*Cuota Go*). **`II`** = Artificial Analysis Intelligence Index **v5.0.1** (tercero independiente,
-leído en `artificialanalysis.ai/leaderboards/models` el 2026-11-05). **AA publica un valor por nivel
-de esfuerzo** (Haiku 5.5: 25 medium, 30 high, 36 max) y opencode no te dice cuál usa por default:
-cita el rango. **El índice se reescala entre versiones** (ya van tres: v4.1.1 → v4.3.2 → v5.0.1):
-compáralo solo dentro de la misma, y no lo mezcles con cifras de este archivo anteriores al
-2026-11-05 ni con el "57" que este skill citaba para `glm-5.3-flash` (v4.1.1, dicho por Z.ai; marcó
-42 en la v4.3.2 y marca 28 en la v5.0.1). **`seg`** = tiempo de pared medido en esta máquina en una
-extracción de ~6K tokens de archivo local (mediana de 5 corridas en dos rondas del 2026-11-05, con
-6-9 procesos `opencode` simultáneos: las cifras absolutas se inflan unos segundos, el orden no).
+Precios en USD por 1M tokens (input/output). Cuota Go en requests estimados por ventana de 5h.
+**`límite`** = los dólares mensuales que la bolsa del plan cubre si usaras SOLO ese modelo: fija
+cuánto **pesa** cada dólar gastado en él (ver *Cuota Go*). **`II`** = Artificial Analysis
+Intelligence Index **v5.0.1** (tercero independiente, releído en
+`artificialanalysis.ai/leaderboards/models` el 2026-11-20; la versión no cambió desde el
+2026-11-05). **AA publica un valor por nivel de esfuerzo** (Haiku 5.5: 25 medium, 30 high, 36 max)
+y opencode no te dice cuál usa por default: cita el rango (los modelos nuevos de esta relectura
+solo los leí a esfuerzo máximo). **El índice se reescala entre versiones** (ya van tres: v4.1.1 →
+v4.3.2 → v5.0.1): compáralo solo dentro de la misma. **`seg`** = tiempo de pared medido en esta
+máquina el 2026-11-20 (viernes 21:00 de CDMX, off-peak) en una extracción de 31 filas con cita
+desde un archivo local, 2 corridas por modelo con 6 procesos `opencode` simultáneos.
 
-> **El precio por token no es el costo por tarea, y la velocidad no es una propiedad fija del
-> modelo.** El 2026-11-05 `deepseek-v4.1-flash` estuvo saturado (8 de 13 corridas de 117-216s,
-> vencidas a los 300s o con `[prefill_cap_refused] the cell is at capacity` / `[overloaded]`) y el
-> ancho pasó un día a `minimax-m3.1-flash`. **Re-medido el 2026-11-06** (off-peak, dos rondas de 6
-> con 6-9 procesos simultáneos, misma extracción de la doc de Go): **12 de 12 correctas en 19-55s**
-> (mediana 34.5s), contra 41-76s de `minimax-m3.1-flash` en la misma ronda. **DeepSeek vuelve a
-> ser el DEFAULT del ancho** porque, a igual exactitud, es el que menos gasta del plan: límite 100 (vs
-> 20 de minimax) y caché de 0.003 (vs 0.015). Medido: 13 jobs de DeepSeek = 0.09% de su mes; 4 de
-> minimax = 0.28% del suyo (~10x más por job). Aun en peak (precio doble) rinde más. La saturación
-> fue intermitente y del proveedor: el helper reintenta solo `[overloaded]` y `[prefill_cap_refused]`
-> (ver *Uso del helper*), y si un lote entero de DeepSeek da 124 o errores de capacidad, relánzalo en
-> `minimax-m3.1-flash`. **Los números de velocidad de AA son dato vivo y se mueven entre capturas**;
-> los índices II no.
+> **Lo que decide el ancho es el PESO en la bolsa, no el precio por token.** Peso de un job = su
+> costo ÷ el límite del modelo. La misma extracción (2026-11-20), en % de la bolsa mensual:
+> `deepseek-v4.1-flash` **0.0045%** · `mimo-v2.6-flash` 0.007% (pero 77-83s) · `glm-5.3-flash`
+> 0.008% · `hy3` 0.010% · `gpt-6-luna` 0.024% · `qwen3.8-flash` 0.025% · `minimax-m3.1-flash`
+> 0.027% · `claude-haiku-5-5` 0.016-0.046% · `hy4` 0.066% · `gemini-4-argon` ~0.22% ·
+> `qwen4-max` **0.44%** (100x DeepSeek). Los gratuitos pesan 0. Con 1% de la bolsa caben ~220
+> extracciones de DeepSeek o 2 de Qwen4 Max.
+>
+> **La velocidad no es una propiedad fija del modelo.** El 2026-11-05 `deepseek-v4.1-flash` estuvo
+> saturado (8 de 13 corridas de 117-216s, vencidas o con `[prefill_cap_refused]` / `[overloaded]`);
+> el 2026-11-06 hizo 19-55s y el 2026-11-20, **14-17s** (el más rápido del pool junto con
+> `gpt-6-luna`). El helper reintenta solo `[overloaded]` y `[prefill_cap_refused]` (ver *Uso del
+> helper*); si un lote entero de DeepSeek da 124 o errores de capacidad, relánzalo en
+> `hy4-flash-free` (gratis) o `glm-5.3-flash`. **Los números de velocidad de AA son dato vivo y se
+> mueven entre capturas**; los índices II no.
 
 | Caso de uso | Primario | Fallback | Por qué |
 |---|---|---|---|
-| **Investigación web / fetch+resumen** | `deepseek-v4.1-flash` | `minimax-m3.1-flash` · `glm-5.3-flash` · `gpt-6-luna` | 0.15/0.60 (doble en peak), 43,330 req/5h, **límite 100**, II 29-33, 1M ctx con imagen, caché 0.003, 0 días de retención (acuerdo ZDR mensual). **DEFAULT del ancho** (re-medido 2026-11-06: 19-55s, 12/12). La prueba web con cita no se repitió el 2026-11-06 (el 2026-11-05, saturado, tardó 216s o falló); `minimax-m3.1-flash` hizo 11-27s, 9/9 |
-| **Mecánico simple en lote** | `deepseek-v4.1-flash` | `minimax-m3.1-flash` · `glm-5.3-flash` · `codex:gpt-6-luna` | `mimo-v2.6-flash` es el más barato por token (0.14/0.28) pero 3x más lento (32-61s); codex lee y escribe archivos desde el 2026-10-01 (ver *Codex CLI*) |
-| **Resumen/ingesta masiva o multimodal** | `glm-5.3-flash` | `minimax-m3.1-flash` (img/video) · `gpt-6-luna` o `claude-haiku-5-5` (PDF) · `gemini-4-argon` o `mimo-v2.6-flash` (audio) | Según el endpoint de Go: `glm-5.3-flash` ingiere texto+imagen+video (ya no lista PDF), 1M ctx, II 28, ~20s. PDF ("application"): solo `gpt-6-luna`, `claude-haiku-5-5` y `gemini-4-argon`. Audio: solo `gemini-4-argon` y `mimo-v2.6-*` (lentos) |
-| **Contexto ultra-largo barato** (repo/paper completo) | `deepseek-v4.1-flash` | `minimax-m3.1-flash` · `mimo-v2.6-flash` | 1M ctx y el caché de lectura más barato (0.003; `mimo-v2.6-flash` 0.0028 pero lento; `minimax-m3.1-flash` 0.015). Si da 124 o error de capacidad tras los reintentos del helper, relánzala en el fallback |
-| **Código acotado con spec cerrada** | `glm-5.3-flash` | `gpt-6-luna` · `minimax-m3.1-flash` · `claude-haiku-5-5` | II 28, ~20s estables, 0 días de retención. `hy3` (no está en AA v5; 31s) y `hy4-preview` (86s, errático) quedaron dominados |
-| **Código agentic multi-paso (>5 tools)** | `claude-haiku-5-5` | `deepseek-v4.1-flash` · `glm-5.3-flash` · `gpt-6-luna` | Mayor índice entre los rápidos (II 30-36 contra 28-29; DeepSeek 29-33). **No medí agentic propio: la evidencia es el índice más la latencia.** Retiene 30 días |
-| **Bug-fixing / SWE con repro claro** | `glm-5.3-flash` | `glm-5.3` · `claude-haiku-5-5` | AA v5: flash 28 vs `glm-5.3` 32 (máx.), a 1/10 del precio. `glm-5.2` queda fuera del ruteo (Z.ai lo enruta a 5.3) |
-| **Razonamiento algorítmico / semi-quirúrgico** | `kimi-k3.1-pro` | `gemini-4-argon` · `glm-5.3` | II 46 (el más alto entre abiertos; `mimo-v2.6-pro` bajó a 30 y `glm-5.3` a 32), 2.00/10.00, 147 req/5h, límite 15. **Lento**: 31-38s en la extracción y **venció a los 8 min** en una pre-revisión de 110 KB: solo prompts cortos y plazo `8m`. `deepseek-v4-pro` (II 23) y `mimo-v2.6-pro` (50s) salen del ruteo |
-| **Unidad difícil dentro del lote** (1-3 por lote) | `claude-haiku-5-5` | `glm-5.3` (0 días de retención) · `kimi-k3` | II 30-36 según esfuerzo (sobre los ejecutores, 27-29, y `glm-5.3`, 32), 0.10/0.50, ~17s estables, 3,850 req/5h. **Retiene 30 días**: con material sensible va `glm-5.3` (26s, 220 req/5h). Calidad en una unidad realmente difícil: **sin medir** |
-| **Unidad casi-frontier quirúrgica** (1-2 por sesión) | `codex:gpt-6.1-sol` | `codex:gpt-6-astra` · `gemini-4-argon` | II 50-55 (Sol) y 55-57 (Astra) contra 50 de `gemini-4-argon` (Go; 0 días de retención; 440 req/5h; ~60s; **50% de descuento hasta el 2026-11-30**: 2/10 en vez de 4/20). Codex no gasta Go ni tokens de Anthropic y exige ≥ 0.159.1 para `gpt-6.1-sol` (ver *Codex CLI*). `kimi-k3.1-pro` queda para cuando importe su 1M de contexto o su visión |
-| **Delicado / frontier** (arquitectura, seguridad, semántica, revisión y síntesis) | **orquestador (tú/Claude)** | — | NUNCA a un barato. AA v5.0.1 (esfuerzo máx.): Opus 5.5 = 59, Sonnet 5.5 = 55, Fable 5.1 = 49 |
+| **Investigación web / fetch+resumen** | `deepseek-v4.1-flash` | `hy4-flash-free` · `glm-5.3-flash` · `minimax-m3.1-flash` · `gpt-6-luna` | 0.15/0.60 (doble en peak), 43,300 req/5h, **límite 100**, II 29-33, 1M ctx con imagen, caché 0.003, 0 días de retención (acuerdo ZDR mensual). **DEFAULT del ancho**: 14-17s, 31/31, y el menor peso del pool. La prueba web con cita no se repitió desde el 2026-11-05 (`minimax-m3.1-flash` hizo 11-27s, 9/9) |
+| **El ancho a costo cero** (bolsa apretada o lote enorme) | `hy4-flash-free` | `opencode/deepseek-v4.1-flash-free` · `beam-free` | **Nuevo (2026-11-16).** Gratis por tiempo limitado, no entrena y 0 días de retención; 17-19s, 31/31; texto+imagen, 1M ctx. AA no lo lista (Hy4 normal = 35). El gemelo free de DeepSeek hizo 9-19s, 31/31. Los gratuitos tienen **tope diario de solicitudes** (la consola no dice cuántas): si el job falla por eso, vuelve al de pago |
+| **Mecánico simple en lote** | `deepseek-v4.1-flash` | `hy4-flash-free` · `glm-5.3-flash` · `codex:gpt-6-luna` | `mimo-v2.6-flash` es el más barato por token (0.14/0.28) pero 5x más lento (77-83s); codex lee y escribe archivos (ver *Codex CLI*) |
+| **Resumen/ingesta masiva o multimodal** | `glm-5.3-flash` | `minimax-m3.1-flash` (img/video) · `gpt-6-luna` o `claude-haiku-5-5` (PDF) · `gemini-4-argon` o `mimo-v2.6-flash` (audio) | Según el endpoint de Go: `glm-5.3-flash` ingiere texto+imagen+video, 1M ctx, II 28, 18-20s. PDF ("application"): solo `gpt-6-luna`, `claude-haiku-5-5` y `gemini-4-argon`. Audio: solo `gemini-4-argon` y `mimo-v2.6-*` (lentos) |
+| **Contexto ultra-largo barato** (repo/paper completo) | `deepseek-v4.1-flash` | `glm-5.3-flash` · `mimo-v2.6-flash` | 1M ctx y el caché de lectura más barato (0.003; `mimo-v2.6-flash` 0.0028 pero lento; `glm-5.3-flash` 0.03). Si da 124 o error de capacidad tras los reintentos del helper, relánzala en el fallback |
+| **Código acotado con spec cerrada** | `glm-5.3-flash` | `gpt-6-luna` · `deepseek-v4.1-flash` · `claude-haiku-5-5` | II 28, 18-20s estables, 0 días de retención, peso 0.008%. `hy3` (24-30s, 256K ctx), `hy4` (53-81s) y `hy4-preview` quedaron dominados |
+| **Código agentic multi-paso (>5 tools)** | `claude-haiku-5-5` | `deepseek-v4.1-flash` · `glm-5.3-flash` · `gpt-6-luna` | Mayor índice entre los rápidos (II 30-36 contra 28-29; DeepSeek 29-33), 15-17s. **No medí agentic propio: la evidencia es el índice más la latencia.** Retiene 30 días |
+| **Bug-fixing / SWE con repro claro** | `glm-5.3-flash` | `glm-5.3` · `claude-haiku-5-5` | AA v5: flash 28 vs `glm-5.3` 32 (máx.), a 1/10 del precio. `glm-5.2` ya no existe en Go (`UnknownError` el 2026-11-20) |
+| **Razonamiento algorítmico / semi-quirúrgico** | `qwen4-max` | `kimi-k3.1-pro` · `gemini-4-argon` · `glm-5.3` | **Nuevo (2026-11-16).** II 43, 1.50/4.50, 463 req/5h, límite 15, 0 días de retención, texto+imagen+video. Tres puntos menos que `kimi-k3.1-pro` (II 46; 2.00/10.00; 147 req/5h), pero la mitad de precio de salida, el triple de solicitudes y no se cuelga: 62s en la extracción y 98s en una pre-revisión de 8 unidades, donde K3.1 Pro venció a los 8 min el 2026-11-05. Evidencia propia: 3 jobs. Pesa: 0.44% de la bolsa por job corto |
+| **Unidad difícil dentro del lote** (1-3 por lote) | `claude-haiku-5-5` | `glm-5.3` (0 días de retención) · `hy4` | II 30-36 según esfuerzo (sobre los ejecutores, 27-29, y `glm-5.3`, 32), 0.10/0.50, 15-17s, 3,850 req/5h. **Retiene 30 días**: con material sensible va `glm-5.3` (34s; II 32) o `hy4` (II 35 pero 53-81s). Calidad en una unidad realmente difícil: **sin medir** |
+| **Unidad casi-frontier quirúrgica** (1-2 por sesión) | `codex:gpt-6.2-sol` | `codex:gpt-6.2-astra` · `gemini-4-argon` · `qwen4-max` | **GPT-6.2 llegó a Codex**: Sol marca II 57 (antes 6.1 Sol, 55) con más cuota (17-180 mensajes/5h en Plus) y Astra II 62 (6-50 mensajes/5h), por encima de Opus 5.5 (59). Codex no gasta Go ni tokens de Anthropic. `gemini-4-argon` (II 50; 566 req/5h) **duplica su precio el 2026-12-01** (de 2/10 a 4/20) y **ya no es de 0 días: retiene hasta 55** |
+| **Delicado / frontier** (arquitectura, seguridad, semántica, revisión y síntesis) | **orquestador (tú/Claude)** | — | NUNCA a un barato. AA v5.0.1 (esfuerzo máx.): Fable 5.2 = 65, GPT-6.2 Astra = 62, Opus 5.5 = 59, GPT-6.2 Sol = 57, Sonnet 5.5 = 55 |
 
-**Material sensible o del cliente:** solo modelos de **0 días de retención** (`minimax-m3.1-flash`,
-`glm-5.3-flash`, `glm-5.3`, `kimi-k3`, `gemini-4-argon`, y `deepseek-v4.1-flash` mientras siga vigente
-su acuerdo ZDR mensual: hoy hasta el 2026-11-30; reléelo en la doc al cambiar de mes). `gpt-6-luna` y
-`claude-haiku-5-5` retienen 30 días: úsalos solo con material no sensible. Los jobs `codex:*` siguen
-los controles de datos de tu cuenta ChatGPT (no medidos aquí): para pre-revisar material del cliente
-usa `gemini-4-argon`, no `codex:*`.
+**Promoción que vence:** hasta el **2026-11-22** el límite de `glm-5.3` es de 500 USD (normal: 15), así
+que hasta ese día pesa 33x menos (0.01% de la bolsa por extracción, 6,600 req/5h) y es la unidad
+difícil más barata con 0 días de retención (II 32, 34s). El endpoint no dice a cuánto vuelve: desde
+el 23 trátalo otra vez como quirúrgico (`go-budget` lee el límite vigente).
+
+**Material sensible o del cliente:** solo modelos de **0 días de retención** (`glm-5.3-flash`,
+`glm-5.3`, `minimax-m3.1-flash`, `qwen4-max`, `kimi-k3`, `kimi-k3.1-pro`, `hy4-flash-free`, y
+`deepseek-v4.1-flash` mientras siga vigente su acuerdo ZDR mensual: hoy hasta el 2026-11-30; reléelo
+en la doc al cambiar de mes). **`gemini-4-argon` salió de esta lista el 2026-11-20** (la doc ahora
+dice 55 días). `gpt-6-luna` y `claude-haiku-5-5` retienen 30 días: úsalos solo con material no
+sensible. Los jobs `codex:*` siguen los controles de datos de tu cuenta ChatGPT (no medidos aquí):
+para pre-revisar material del cliente usa `qwen4-max` o `hy4-flash-free`, no `codex:*`.
 La tabla de arriba nombra a varios de ellos como fallback por velocidad, no por privacidad.
 
-### Qué pre-revisa el lote — medido el 2026-11-06 (y el 2026-11-05 y 2026-10-01)
+### Qué pre-revisa el lote — medido el 2026-11-20 (y el 2026-11-06, 2026-11-05 y 2026-10-01)
 
-Tercer lote (2026-11-06; 5 unidades con 7 fallas sembradas: dos números alterados contra su propia
-cita, una salida truncada, dos filas omitidas sin declararlo, un precio que desobedece la instrucción
-y dígitos transpuestos): **los 7 candidatos detectaron las 7**. Tiempos: `codex:gpt-6.1-terra` **30s**,
-`kimi-k3` (Go) 31s, `codex:gpt-6-luna` 72s, `codex:gpt-6.1-sol` 77s, `minimax-m3.1-flash` 83s,
-`gemini-4-argon` 95s, `deepseek-v4.1-flash` 100s. Los tres `codex:*` marcaron DUDOSO/FALLO la unidad
-limpia porque su columna de solicitudes no traía cita (la plantilla pide cita para *cada* número: es
-lectura literal, no error). El lote no discrimina calidad: la elección sale del índice (Sol 50-55,
-`gemini-4-argon` 50, Terra 42-51, K3 44 en v4.3.2, Luna 21-28) y de **qué presupuesto gasta**. Una
-pre-revisión de K3 costó 0.19 USD (1.3% de su mes); una de Argon, 0.14 (0.5% del suyo).
+Cuarto lote (2026-11-20; 8 unidades, 2 limpias y 6 con fallas sembradas más finas que las del
+tercero: un número contra su propia cita, valores de la columna Go Plus dados como Go **con cita
+real**, dos filas intercambiadas **junto con sus citas**, dos filas omitidas con `===FIN===`
+presente, una fila inventada con cita fabricada y un truncamiento): **los 9 candidatos acertaron las
+8 unidades, sin falsas alarmas**. Tiempos: `codex:gpt-6.1-terra` **17s**, `gpt-6-luna` (Go) 39s,
+`hy4-flash-free` 44s, `codex:gpt-6.2-astra` 48s, `minimax-m3.1-flash` 52s, `codex:gpt-6.2-sol` 61s,
+`deepseek-v4.1-flash` 91s, `qwen4-max` 98s, `gemini-4-argon` 103s. Peso en la bolsa de Go por
+pre-revisión: DeepSeek ~0.02%, Luna ~0.07%, minimax ~0.09%, Argon ~0.67%, Qwen4 Max ~0.76%;
+`hy4-flash-free` y los `codex:*`, cero. El lote sigue sin discriminar calidad: la elección sale del
+índice (Astra 6.2 = 62, Sol 6.2 = 57, Terra = 51, Argon 50, Qwen4 Max 43, DeepSeek 29-33) y de **qué
+presupuesto gasta**.
 
-Segundo lote medido (5 unidades reales con fallas conocidas: una truncada por timeout, una con 3
-citas atribuidas a la versión equivocada, una que omitía los ids que su prompt exigía): `gpt-6-luna`
-**86s**, `deepseek-v4.1-flash` 134s, `minimax-m3.1-flash` **163s** (el más exhaustivo) y `kimi-k3` por
-Go 196s las detectaron; `claude-haiku-5-5` (203s) y `glm-5.3-flash` (215s) dieron **falsos OK**;
-`kimi-k3.1-pro` venció a los 8 min. Lote del 2026-10-01 (19 unidades): `deepseek-v4.1-flash` 141s,
-K3 271s. Tablas y detalle: `reference/catalogo-go.md`.
+Tercer lote (2026-11-06; 5 unidades con 7 fallas sembradas): los 7 candidatos detectaron las 7.
+Segundo lote (2026-11-05; 5 unidades reales con fallas conocidas): `gpt-6-luna` 86s,
+`deepseek-v4.1-flash` 134s, `minimax-m3.1-flash` 163s (el más exhaustivo) y `kimi-k3` 196s las
+detectaron; `claude-haiku-5-5` (203s) y `glm-5.3-flash` (215s) dieron **falsos OK**; `kimi-k3.1-pro`
+venció a los 8 min. Lote del 2026-10-01 (19 unidades): `deepseek-v4.1-flash` 141s, K3 271s. Tablas y
+detalle: `reference/catalogo-go.md`.
 
-**Regla:** pre-revisor por default `deepseek-v4.1-flash` (casi no pesa contra su límite de 100;
-`minimax-m3.1-flash` de respaldo). En lotes de alto impacto lanza **`codex:gpt-6.1-terra` en paralelo**
-(30s, II 42-51, gasta cuota ChatGPT y no Go; tiempo de pared = el del más lento) y cruza los dos
-veredictos; si el impacto es muy alto, `codex:gpt-6.1-sol` (II 50-55, cuota más corta); si el material
-es sensible, `gemini-4-argon` (Go, 0 días de retención, límite 30). **`kimi-k3` ya no pre-revisa**:
-sin Kimi directo gasta de su límite Go de 15 USD, el más caro por token del plan (3/15), y el
-2026-11-05 un solo día de pre-revisiones y consejo lo llevó a ~40% de su semana; queda para el asiento
-Kimi del consejo (`cheap-fanout-ultimate`).
-`glm-5.3-flash` y `claude-haiku-5-5` **no sirven de pre-revisores** (dieron falsos OK) y los modelos de
-índice alto (`kimi-k3.1-pro`, `glm-5.3`, `mimo-v2.6-pro`) tampoco: minutos de más y peor cobertura.
+**Regla:** pre-revisor por default `deepseek-v4.1-flash` (cuatro lotes sin falsos OK y casi no pesa
+en la bolsa); si la bolsa está apretada o quieres costo cero, `hy4-flash-free` (un solo lote de
+evidencia). En lotes de alto impacto lanza **`codex:gpt-6.1-terra` en paralelo** (17s, II 51, gasta
+cuota ChatGPT y no Go; tiempo de pared = el del más lento) y cruza los dos veredictos; si el impacto
+es muy alto, `codex:gpt-6.2-sol` (II 57; 17-180 mensajes/5h); si es crítico,
+`codex:gpt-6.2-astra` (II 62, el más fuerte fuera de Anthropic; 6-50 mensajes/5h: un mensaje por
+lote, no más). Si el material es sensible, `qwen4-max` (Go, 0 días de retención, II 43) o
+`hy4-flash-free`; **ya no `gemini-4-argon`** (retiene hasta 55 días). **`kimi-k3` no pre-revisa**: es
+el más caro por token del plan (3/15) con límite 15; queda para el asiento Kimi del consejo
+(`cheap-fanout-ultimate`).
+`glm-5.3-flash` y `claude-haiku-5-5` **no sirven de pre-revisores** (dieron falsos OK el 2026-11-05)
+y los lentos de índice alto (`kimi-k3.1-pro`, `glm-5.3`, `mimo-v2.6-pro`) tampoco: minutos de más y
+peor cobertura.
 **Valida siempre que la salida traiga `===FIN===`** (la plantilla lo exige): el 2026-11-05 una revisión
 semántica de 17K palabras dejó a `minimax-m3.1-flash` con status 0 y 7.5 KB de trazas **sin veredicto**
 y a `kimi-k3` vencido a los 8 min. Sin `===FIN===` es un fallo aunque el `.status` sea 0: pasa al
-siguiente pre-revisor (`codex:gpt-6.1-terra`; `gpt-6-luna` entregó en ~90s) o parte el lote en
-unidades más chicas. Son **tres lotes, dos chicos**: evidencia delgada. Si vas a depender de esto,
-repite la comparación.
+siguiente pre-revisor (`codex:gpt-6.1-terra`; `gpt-6-luna` entregó en ~40-90s) o parte el lote en
+unidades más chicas. Son **cuatro lotes, tres chicos y los dos últimos sin discriminar**: evidencia
+delgada. Si vas a depender de esto, repite la comparación con fallas semánticas, no de tabla.
 
-### El escalón de la unidad difícil (reconfirmado 2026-11-05)
+### El escalón de la unidad difícil (reconfirmado 2026-11-20)
 
 En un lote de ocho unidades casi siempre hay una o dos **más difíciles que el resto** —no de
 frontier, pero más de lo que el ejecutor del ancho hace bien—. Hoy las cubre `claude-haiku-5-5`:
-II 30-36 según esfuerzo (AA v5.0.1), 0.10/0.50, ~17s y 3,850 req/5h, con la salvedad de que retiene
-datos 30 días (para material sensible, `glm-5.3`).
+II 30-36 según esfuerzo (AA v5.0.1), 0.10/0.50, 15-17s y 3,850 req/5h, con la salvedad de que retiene
+datos 30 días (para material sensible, `glm-5.3`; hasta el 2026-11-22 además es la más barata, por su
+límite promocional de 500). Ojo con el peso: Haiku tiene límite 15, así que una unidad agentic larga
+(1 USD) gasta 6.7% de la bolsa; si el lote trae muchas unidades difíciles, mándalas a
+`codex:gpt-6.1-terra` (II 51, otra cuota).
 
 > **Lo que ya no se sostiene y lo que sigue siendo evidencia delgada.** Esta fila era de
 > `glm-5.3-flash` porque "II 42 queda a 2-4 puntos de K3 y de `glm-5.3`" —cifra de la v4.3.2—. En la
 > v5.0.1 `glm-5.3-flash` marca 28 y queda **por debajo** de `deepseek-v4.1-flash` (29-33) y de
 > `glm-5.3` (32). Sigue sin haber un comparativo mío de calidad en una unidad *genuinamente* difícil:
 > los benchmarks de extracción (84/84) y de web con cita (9/9) no discriminan. **Cómo validarlo:** la
-> próxima unidad difícil real, mándala a `claude-haiku-5-5`, a `glm-5.3` y a `codex:gpt-6.1-sol` y
+> próxima unidad difícil real, mándala a `claude-haiku-5-5`, a `glm-5.3` y a `codex:gpt-6.1-terra` y
 > compara.
 
 ### Catálogo completo del pool Go
 
-Los 31 modelos que lista la doc (29 que sirve el endpoint) con cuota, límite, precio, contexto,
-índice II y velocidad medida están en `reference/catalogo-go.md` (releído el 2026-11-05). La tabla
-de arriba ya decide el ruteo: abre el catálogo solo para un caso que no cubra o para un número exacto.
+Los 31 modelos que sirve el endpoint (la consola lista 32: cuenta `glm-5.2`, que ya no responde) con
+cuota, límite, precio, contexto, índice II, velocidad y peso en la bolsa están en
+`reference/catalogo-go.md` (releído el 2026-11-20). La tabla de arriba ya decide el ruteo: abre el
+catálogo solo para un caso que no cubra o para un número exacto.
 
-> **Precio ≠ cuota ≠ límite ≠ velocidad.** Son cuatro cosas. El ancho va a los de cuota alta y buena
-> velocidad: `deepseek-v4.1-flash` (43,330 req/5h, límite 100), `glm-5.3-flash` (6,320, límite 60),
-> `minimax-m3.1-flash` (3,880, límite 20) y `gpt-6-luna` (4,230, límite 15). Los de <500 req/5h (`glm-5.3`, `qwen3.8-max`, `kimi-k3`, `kimi-k3.1-pro`, `gemini-4-argon`)
-> son 1-2 unidades quirúrgicas por sesión, nunca el ancho.
-> **Muertos hoy (no los rutees):** `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `kimi-k2.6`,
-> `minimax-m2.7` y los free de Go `longcat-2.5-preview-free`, `space-bunny-free`,
-> `step-5-preview-free` responden `UnknownError`; `mimo-v2.5` y `mimo-v2.5-pro` dan error duro
-> (*"has been deprecated. Use mimo-v2.6-… instead"*) aunque la tabla de la doc aún los lista.
-> Fuera de la doc desde el 2026-08-28: `glm-5.1`, `minimax-m2.5`, `qwen3.7-max`, `qwen3.6-plus`,
-> `grok-4.5`. `opencode models` es una lista desfasada: la prueba real de que un modelo existe es
-> `opencode run -m <ruta> "Responde exactamente: PONG"`.
+> **Precio ≠ cuota ≠ límite ≠ velocidad.** Son cuatro cosas. El ancho va a los de límite alto y buena
+> velocidad: `deepseek-v4.1-flash` (43,300 req/5h, límite 100, 14-17s), `glm-5.3-flash` (6,320,
+> límite 60, 18-20s) y los gratuitos `hy4-flash-free` y `opencode/deepseek-v4.1-flash-free`;
+> `minimax-m3.1-flash` (3,880, límite 20) y `gpt-6-luna` (4,230, límite 15) son rápidos pero pesan
+> 5-6x más por job. Los de <600 req/5h (`qwen4-max`, `gemini-4-argon`, `qwen3.8-max`,
+> `kimi-k3.1-pro`, `kimi-k3`) son 1-2 unidades quirúrgicas por sesión, nunca el ancho.
+> **Muertos hoy (no los rutees):** `glm-5.2` (nuevo el 2026-11-20: `UnknownError`),
+> `opencode/glm-5.3-flash-free` (Zen lo retiró el 2026-11-18), `opencode/minimax-m3.1-flash-free`
+> (2026-11-17), `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `kimi-k2.6`, `minimax-m2.7`,
+> `mimo-v2.5`, `mimo-v2.5-pro` y los free de Go `longcat-2.5-preview-free`, `space-bunny-free`,
+> `step-5-preview-free`. Fuera desde el 2026-08-28: `glm-5.1`, `minimax-m2.5`, `qwen3.7-max`,
+> `qwen3.6-plus`, `grok-4.5`. `opencode models` es una lista desfasada: la prueba real de que un
+> modelo existe es `opencode run -m <ruta> "Responde exactamente: PONG"`.
 
 ### Peak/off-peak de DeepSeek (mecánica vigente)
 
@@ -318,35 +340,38 @@ Los dos modelos DeepSeek del plan (`v4.1-flash` y `v4-pro`) cuestan **el doble**
 off-peak. En hora de CDMX (UTC-6) el peak cae **domingo a jueves 19:00-22:00** y **lunes a viernes
 00:00-04:00**. Un lote grande de `deepseek-v4.1-flash` corrido a las 20:00 de CDMX consume el doble de
 límite que a las 10:00. Ningún otro modelo del pool lo hace (para un lote enorme en peak,
-`glm-5.3-flash` cuesta lo mismo todo el día). `v4-flash` y `v4-flash-vision-exp` ya no existen
+`glm-5.3-flash` cuesta lo mismo todo el día y `hy4-flash-free` no cuesta). Reconfirmado en el
+endpoint el 2026-11-20 (campo `cost.multipliers`, factor 2). `v4-flash` y `v4-flash-vision-exp` ya no existen
 (Zen marca `V4 Flash` deprecado el 2026-10-26). El límite de `v4.1-flash` subió de 60 a 100 USD el
 2026-10-30 (changelog de opencode v2.2.4: *"Raised OpenCode Go limits for DeepSeek V4.1 Flash"*). El
 2026-11-05 estuvo saturado y el 2026-11-06 ya respondía bien (ver el aviso de *Ruteo por caso*).
 
-### Privacidad de los modelos Go (tabla vigente de la doc, 2026-11-05)
+### Privacidad de los modelos Go (tabla vigente de la doc, 2026-11-20)
 
 Casi todo el pool es **sin entrenamiento y 0 días de retención**. Las excepciones importan:
 
 | Modelo | Entrenamiento | Retención |
 |---|---|---|
 | `muse-spark-1.3-contributor`, `muse-spark-1.2-contributor`, `iceman-contributor-free` | **Sí, entrena con tus datos** | **No es ZDR** |
+| `gemini-4-argon` | No | **hasta 55 días** (monitoreo de abuso de Google; el 2026-11-05 la doc decía 0) |
 | `grok-4.7`, `gpt-6-luna`, `gpt-5.6-luna`, `claude-haiku-5-5`, `beam-free` | No | 30 días |
 | DeepSeek (`v4.1-flash`, `v4-pro`) | No | 0 días* — *"el acuerdo ZDR se renueva cada mes; el vigente vale hasta el 30 de noviembre de 2026"* |
-| Todos los demás (incluido `gemini-4-argon`) | No | 0 días |
+| Todos los demás (incluidos `qwen4-max`, `hy4-flash-free` y `longcat-2.5-free`) | No | 0 días |
 
 **Defensa del servidor.** El workspace bloquea por default los endpoints de pago que entrenan
 (*"By default, paid endpoints that train on request data are blocked"*): verificado el 2026-11-05,
 `iceman-contributor-free` responde con error en vez de servir; los `muse-spark-*` caen bajo la misma
 regla según la doc. Se desbloquean con *Allow paid endpoints that train on request data* en Settings ›
-Privacy: **déjalo apagado**. Las regiones permitidas por default son Europa y EE. UU.; DeepSeek pide
-*Global* en *Regions* según la doc y en esta cuenta ya responde (si algún día falla con un error de
-región, es ese ajuste).
+Privacy: **déjalo apagado**. Las regiones permitidas por default son Europa y EE. UU.; DeepSeek y
+`longcat-2.5-free` piden *Global* en *Regions* según la doc y en esta cuenta ya responden (si algún
+día fallan con un error de región, es ese ajuste).
 
 **LongCat — discrepancia que no pude cerrar.** La doc de OpenCode dice "sin entrenamiento, 0 días"
-para su ruta, pero la política de privacidad **propia** de Meituan (`longcat.chat/privacy`) permite
-usar datos desidentificados para entrenar y optimizar modelos y exige guardar ciertos logs ≥6
-meses. Úsalo **solo vía OpenCode** y no con material sensible del cliente hasta confirmar el
-acuerdo; nunca apuntes a la plataforma de Meituan directamente.
+para sus rutas (y de `longcat-2.5-free` añade *"Hosted in China"* y 100 solicitudes al día), pero la
+política de privacidad **propia** de Meituan (`longcat.chat/privacy`) permite usar datos
+desidentificados para entrenar y optimizar modelos y exige guardar ciertos logs ≥6 meses. Úsalo
+**solo vía OpenCode** y no con material sensible del cliente hasta confirmar el acuerdo; nunca
+apuntes a la plataforma de Meituan directamente.
 
 ## Modelos vetados — decisión permanente de Antonio (2026-08-28; ampliada 2026-10-01 y 2026-11-05)
 
@@ -363,9 +388,9 @@ por su cuota y los vuelva a meter al ruteo.
 | `grok-4.7` | **Ampliación del 2026-10-01, confirmada por Antonio ese día.** Mismo precio y "misma velocidad" que 4.6 según xAI; AA le mide un TTFT de **30 a 79s según la captura** (la mediana del leaderboard es ~4s) y yo medí 67.5s en una extracción que los rápidos hacen en 17s. Retiene 30 días. La familia Grok sigue fuera del ruteo |
 
 **Con qué se cubren sus casos:** el volumen bruto que habría ido a muse-spark va a
-`deepseek-v4.1-flash` (43,330 req/5h), `minimax-m3.1-flash`, `glm-5.3-flash` y `gpt-6-luna` (0 días de
-retención los tres primeros); el asiento quirúrgico que habría ido a
-grok va a `codex:gpt-6.1-sol` o `gemini-4-argon`.
+`deepseek-v4.1-flash` (43,300 req/5h), `hy4-flash-free`, `glm-5.3-flash` y `minimax-m3.1-flash` (0 días
+de retención los cuatro); el asiento quirúrgico que habría ido a
+grok va a `codex:gpt-6.2-sol`, `qwen4-max` o `gemini-4-argon`.
 
 Dato nuevo sobre grok-4.7 (2026-11-05): AA v5.0.1 le da II 35 y 32.67-52.94s de
 respuesta según esfuerzo; el veto se mantiene.
@@ -378,70 +403,94 @@ lo permite con `CHEAP_FANOUT_ALLOW_VETOED=1` en esa invocación. No lo pongas en
 Hay dos cosas distintas y se confunden: **gemelos free** (`opencode/<id>-free`, el mismo modelo gratis,
 por la puerta Zen) y **modelos gratuitos por derecho propio**. La doc de Zen avisa de varios:
 *"During its free period, collected data may be used to improve the model"*. Releído y probado con
-`opencode run` el 2026-11-05 (los modelos free solo sirven desde OpenCode: otros clientes reciben 403):
+`opencode run` el 2026-11-20 (los modelos free solo sirven desde OpenCode: otros clientes reciben
+403). **Todos tienen un tope diario de solicitudes** (*"Free models have a daily request limit"*; la
+consola solo da la cifra de LongCat) y todos son "limited time": desaparecen sin aviso.
 
 | Ruta | ¿Responde? | ¿Entrena con tus prompts? | Veredicto |
 |---|---|---|---|
-| `opencode/glm-5.3-flash-free`, `opencode/deepseek-v4.1-flash-free` | ✅ PONG ~8s | **No**: *"Its provider follows a zero-retention policy and does not use your data for model training"* | **Sí. Son gemelos free seguros otra vez** (los de 2026-10-01 murieron o entrenaban). "Limited time" |
+| `hy4-flash-free` (Go) · `opencode/hy4-flash-free` | ✅ 17-19s, 31/31 | **No**; 0 días de retención | **Sí. El gratuito bueno de hoy** (nuevo, 2026-11-16): ancho a costo cero y pre-revisor gratis (8/8 en 44s). Texto+imagen, 1M ctx. AA no lo lista |
+| `opencode/deepseek-v4.1-flash-free` | ✅ 9-19s, 31/31 | **No**: *"Its provider follows a zero-retention policy and does not use your data for model training"* | **Sí.** El mismo caballo del ancho, gratis |
 | `beam-free` (Go) · `opencode/beam-free` | ✅ ~20s | No entrena; **retiene 30 días**; no disponible en una lista de países que no incluye México | **Sí**, material no sensible; AA "Beam 1.0" marca II 18: solo tareas triviales |
-| `iceman-contributor-free` (Go) | ❌ lo **bloquea el servidor** | **Sí** ("in exchange for permission to use your prompts and completions"), no ZDR | **No. VETADO** (ver *Modelos vetados*). Error: *"This Go model trains on request data. Turn on 'Allow paid endpoints that train on request data'…"* |
-| `opencode/mimo-v2.6-flash-free` | ✅ ~10s | **Puede** ("collected data may be used") | No para material del cliente |
-| `opencode/big-pickle`, `pulse-alpha-free`, `flint-40b-free` | sin probar | **Puede** | No para material del cliente |
-| `opencode/nemotron-3-ultra-free`, `nemotron-3.5-lightning-free`, `nemotron-3.5-super-vl-free` | sin probar | NVIDIA: "Trial use only — do not submit personal or confidential data" | No |
-| `longcat-2.5-preview-free`, `space-bunny-free`, `step-5-preview-free` (Go) | ❌ `UnknownError` | — | **Muertos**: salieron de Go aunque models.dev aún los lista |
+| `longcat-2.5-free` (Go) · `opencode/longcat-2.5-free` | ✅ 47s, 31/31 | No según la doc; **alojado en China**; **100 solicitudes al día** | Solo material público y pocas unidades (ver *LongCat* en privacidad) |
+| `opencode/glm-5.3-flash-free` | ❌ retirado el 2026-11-18 | — | **Muerto** (duró trece días como gemelo seguro) |
+| `iceman-contributor-free` (Go) · `opencode/iceman-free` | ❌ lo **bloquea el servidor** (Go) | **Sí** ("collected data is retained and used to improve the model"), no ZDR | **No. VETADO** (ver *Modelos vetados*) |
+| `opencode/inkling-2-small-free` | sin probar | **Sí** ("retains your data and may use it for model training") | No |
+| `opencode/mimo-v2.6-flash-free`, `opencode/big-pickle`, `opencode/flint-40b-free` | sin probar hoy | **Puede** ("collected data may be used") | No para material del cliente |
+| `opencode/nemotron-3.5-lightning-free`, `nemotron-3.5-super-vl-free` | sin probar | NVIDIA: "Trial use only — do not submit personal or confidential data" | No |
 
 **Consecuencia para el helper:** el rescate automático por cuota sigue **apagado** (`SAFE_FREE_TWINS`
-vacío en `bin/cheap-fanout`) porque cuando se decidió los gemelos entrenaban con tus prompts. Hoy
-`glm-5.3-flash-free` y `deepseek-v4.1-flash-free` no lo hacen; habilitarlos es un cambio de una línea
-que queda **pendiente de OK de Antonio**. Mientras tanto, sin gemelo seguro el job queda en
-`.status=77` y decides tú; los gratuitos buenos se eligen a mano. Override solo con material público:
-`CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1`.
+vacío en `bin/cheap-fanout`). Con la bolsa compartida ese rescate vale más que antes —al agotarse la
+bolsa ya no sirve cambiar a otro modelo de pago— y `deepseek-v4.1-flash-free` hoy no entrena:
+habilitarlo es un cambio de una línea que queda **pendiente de OK de Antonio** (el antecedente en
+contra: `glm-5.3-flash-free` era igual de seguro y murió en trece días). Mientras tanto, sin gemelo
+seguro el job queda en `.status=77` y decides tú; los gratuitos buenos se eligen a mano. Override solo
+con material público: `CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1`.
 
-## Cuota Go: límites por modelo (vigente desde el 2026-10-01; releído 2026-11-05)
+## Cuota Go: una bolsa compartida, ponderada por modelo (doc del 2026-11-20)
 
-Hasta el 2026-08-28 el plan tenía un pozo global (12 USD/5h, 30 USD/semana, 60 USD/mes) **y** un tope por
-modelo. **La doc ya no menciona el pozo global**: define todo por modelo.
+Tercer esquema en tres meses. Hasta el 2026-08-28 había un pozo global en dólares; del 2026-10-01 al
+2026-11-06 la doc definía un límite **independiente** por modelo; **desde la relectura del
+2026-11-20 es una sola bolsa** que comparten todos los modelos de pago:
 
-> *"Each model has the following usage limits: 5-hour — 20% of the monthly limit; weekly — 50%; and
-> monthly — 100%."* — `opencode.ai/docs/go`
+> *"The paid models you use on Go share one allowance. […] Switching models draws from the same
+> allowance. If you reach a limit, you can use a free model or turn on Extra Usage."*
+> *"Each model's monthly limit shows how much usage your plan covers if you use only that model over
+> the month. For example, 1.50 USD of usage on a model with a 15 USD limit uses 10% of your monthly
+> allowance. So does 6 USD on a model with a 60 USD limit."* — `opencode.ai/docs/go`
 
-Cada modelo trae un **límite mensual** (columna `límite` del catálogo: 100, 60, 30, 20 o 15 USD en el
-plan Go). Un modelo de 60 permite 12 USD/5h, 30 USD/semana y 60 USD/mes; uno de 100
-(`deepseek-v4.1-flash`) permite 20/50/100; uno de 15 permite 3 USD/5h, 7.50 USD/semana y 15 USD/mes.
-La doc lo explica en *"Why some models have lower usage"*: donde hubo descuento con el proveedor el
-límite es alto; donde no (modelo nuevo o precio público ya rebajado) baja.
+O sea: **consumo de la bolsa = suma de (dólares gastados en cada modelo ÷ límite de ese modelo)**.
+El límite ya no es un carril propio: es el **peso** de cada dólar. Límites del plan Go hoy (endpoint,
+campo `go.monthly_usage`): `glm-5.3` 500 (promoción hasta el 2026-11-22), `deepseek-v4.1-flash` 100;
+60 para `glm-5.3-flash`, `mimo-v2.6-flash`, `hy3`, `hy4`, `longcat-2.0`, `minimax-m3`, `qwen3.7-plus`
+y `kimi-k2.7-code`; 30 para `gemini-4-argon`, `qwen3.8-flash` y `hy4-preview`; 20 para
+`minimax-m3.1-flash`; y 15 para el resto (`gpt-6-luna`, `claude-haiku-5-5`, `qwen4-max`, `kimi-k3`,
+`kimi-k3.1-pro`, `qwen3.8-max`…). Un dólar en un modelo de 15 gasta 6.7% del mes; en DeepSeek, 1%.
+
+Las tres ventanas son fracciones de la bolsa: **5 horas = 20%** (corre desde tu primer uso),
+**semana = 50%** (se reinicia el **lunes 00:00 UTC**, domingo 18:00 de CDMX) y **mes = 100%** (se
+reinicia con el periodo de pago). La doc ya no publica la tabla de límites ni de solicitudes: viven
+en `opencode.ai/console/go` y en el endpoint.
+
+**Consecuencias operativas (cambian respecto al skill anterior):**
+
+- **Agotar la bolsa bloquea TODOS los modelos de pago.** "Cambiar de modelo siempre consigue
+  presupuesto" **dejó de ser cierto**. Las salidas son un gratuito que no entrene
+  (`hy4-flash-free`, `opencode/deepseek-v4.1-flash-free`) o `codex:*`.
+- **Un job caro le quita presupuesto al ancho.** Una pre-revisión con `qwen4-max` (0.76% del mes,
+  3.8% de la ventana de 5h) equivale a ~170 extracciones de DeepSeek, y 26 seguidas agotan la
+  ventana. Lo caro va por `codex:*` siempre que el material lo permita.
+- **Sin verificar contra la consola.** El 2026-11-06 la barra de la consola (40% semanal, 20%
+  mensual) cuadraba con el modelo más cargado (`kimi-k3`), no con la suma ponderada (72% y 36%): o el
+  esquema cambió después, o la doc lo describe distinto de como se aplica. Hoy solo tengo el texto
+  de la doc. **La próxima vez que abras la consola, compara su barra con `go-budget`**; si no
+  cuadran, manda la consola.
 
 Hay **dos planes más**: **Go Plus de 40 USD/mes** (límites mayores por modelo: `glm-5.3-flash` 180,
-`deepseek-v4.1-flash` 200, `kimi-k3` 60) y **Go Teams de 20 USD/miembro/mes** (nuevo; cada miembro
-con sus propios límites, **5 USD más que Go en cada modelo**; solo para workspaces de varios
-miembros, y arranca con Extra Usage encendido). Antonio está en Go y gasta unos 3.5 USD al mes
-(incluidas las mediciones del 2026-11-05): no necesita ninguno. Cada respuesta de Go informa cuánto
-contó la petición en `opencode.allowance` (dólares del límite mensual del plan).
-
-**Consecuencia operativa:** agotar un modelo no agota a los demás; **cambiar de modelo siempre
-consigue presupuesto**. Lo que no puedes saber desde el helper es *cuál* modelo cambiar: eso es una
-decisión de calidad y es tuya.
+`deepseek-v4.1-flash` 200, `kimi-k3` 60) y **Go Teams de 20 USD/miembro/mes** (mínimo 2 miembros;
+cada uno con su bolsa, **5 USD más que Go en cada modelo**; arranca con Extra Usage encendido).
+Antonio está en Go: en los 30 días al 2026-11-20 gastó ~10.6 USD de tarifa contable, que ponderados
+son **~46% de la bolsa mensual** (casi todo mediciones con modelos de límite 15). No necesita otro
+plan mientras lo caro vaya por Codex. Cada respuesta de Go informa cuánto contó la petición en
+`opencode.allowance`.
 
 ```bash
-~/.claude/skills/cheap-fanout/bin/go-budget      # por modelo, en sus tres ventanas
-GO_PLUS=1 ~/.claude/skills/cheap-fanout/bin/go-budget   # contra los límites de Go Plus
-GO_TEAMS=1 ~/.claude/skills/cheap-fanout/bin/go-budget  # contra los de Go Teams (Go + 5 USD)
+~/.claude/skills/cheap-fanout/bin/go-budget              # la bolsa en sus tres ventanas + aporte por modelo
+~/.claude/skills/cheap-fanout/bin/go-budget --model qwen4-max   # además, cuánto pesa 1 USD de ese modelo
+GO_PLUS=1 ~/.claude/skills/cheap-fanout/bin/go-budget    # contra los límites de Go Plus (GO_TEAMS=1: Teams)
+GO_PERIOD_DAY=9 ~/.claude/skills/cheap-fanout/bin/go-budget     # si sabes qué día renueva tu plan
 ```
-
-- **Un modelo apretado o agotado** → cambia ESE job a otro modelo Go (el catálogo te dice a cuál
-  según el caso), a un free sin entrenamiento o a `codex`.
-- `go-budget` sigue mostrando una fila agregada "informativa" (suma de todos los modelos contra
-  12/30/60). **Ya no es un límite documentado y no mueve el exit code**: si algún día resulta que
-  el proveedor sí aplica un global, esa fila es la que lo mostraría.
 
 **Lo que sí está automatizado:**
 
-1. **Antes de un lote grande, mide.** `go-budget` lee la base local de opencode y te da el gasto
-   por modelo contra sus tres ventanas. Exit code: `0` holgado · `1` apretado (≥80% en una ventana
-   de algún modelo) · `2` el `--model` pedido agotó una de sus ventanas.
+1. **Antes de un lote grande, mide.** `go-budget` lee la base local de opencode, pondera cada modelo
+   con su límite **leído en vivo del endpoint** (caché de 24 h; tabla de respaldo si no hay red) y te
+   da el % usado de la bolsa en las tres ventanas. Exit code: `0` holgado · `1` apretado (≥80% en
+   alguna ventana) · `2` agotado (≥100%: ningún modelo de pago va a responder). El mes lo calcula
+   como 30 días corridos salvo que le des `GO_PERIOD_DAY`: sin él, sobreestima tras renovar.
 2. **Durante el lote, el helper detecta la cuota.** Al ver la firma `Provider rate limit exceeded`
-   intenta el gemelo free del mismo modelo **solo si no entrena** (hoy ninguno está habilitado en el
-   helper: ver *Modelos gratuitos*). `--on-quota off` lo desactiva del todo.
+   intenta el gemelo free del mismo modelo **solo si está en `SAFE_FREE_TWINS`** (hoy vacío: ver
+   *Modelos gratuitos*). `--on-quota off` lo desactiva del todo.
 3. **Si no hay gemelo seguro, el helper NO sustituye el modelo.** Deja el job en `.status=77`
    ("SIN CUOTA") y te lo reporta, para que decidas tú.
 
@@ -449,13 +498,13 @@ GO_TEAMS=1 ~/.claude/skills/cheap-fanout/bin/go-budget  # contra los de Go Teams
 
 | Puerta | En `jobs.tsv` | Presupuesto | Para qué |
 |---|---|---|---|
-| Go | `deepseek-v4.1-flash` | límite por modelo (100/60/30/20/15 USD, ventanas 20%/50%/100%) | el ancho, por default |
-| Free | `opencode/glm-5.3-flash-free`, `opencode/deepseek-v4.1-flash-free`, `beam-free` | gratis, "limited time" | el ancho sin entrenamiento cuando Go aprieta (a mano; no hay rescate automático) |
-| ChatGPT | `codex:gpt-6.1-sol` / `codex:<m>` | ventana 5h + semanal de ChatGPT | casi-frontier, código, mecánico; **no** investigación web |
+| Go | `deepseek-v4.1-flash` | **una bolsa** para todos los modelos de pago; cada dólar pesa 1/límite (ventanas 20%/50%/100%) | el ancho, por default |
+| Free | `hy4-flash-free`, `opencode/deepseek-v4.1-flash-free`, `beam-free` | gratis, "limited time", con tope diario | el ancho sin tocar la bolsa (a mano; no hay rescate automático) |
+| ChatGPT | `codex:gpt-6.2-sol` / `codex:<m>` | ventana 5h + semanal de ChatGPT | casi-frontier, pre-revisión de alto impacto, código, mecánico; **no** investigación web |
 | ~~Allegretto~~ | ~~`kimi-code-plan-cn/k3`~~ | **pausada por Antonio (2026-11-05)** | no rutear; K3 va por Go |
 
 > **Ojo con "Extra Usage"** (antes "Use balance"): en la página de Go de la consola hay una opción
-> que, al agotarse el plan, sigue sirviendo requests cobrando a tu saldo de la consola — o sea,
+> que, al agotarse la bolsa, sigue sirviendo requests cobrando a tu saldo de la consola — o sea,
 > **dinero real** (en Go Teams viene encendida de fábrica; en Go es opt-in). Si no la has activado a
 > propósito, déjala apagada; el fallback bueno es un free sin entrenamiento, no el de pago.
 
@@ -463,26 +512,31 @@ GO_TEAMS=1 ~/.claude/skills/cheap-fanout/bin/go-budget  # contra los de Go Teams
 
 `codex exec` corre **no-interactivo con el login de ChatGPT** (sin API key). En `jobs.tsv` usa
 `codex:<model>`; el helper lo lanza como `codex exec --skip-git-repo-check --ephemeral -s read-only
--o out_file` (y `-C <dir>` con `--dir`). Verificado el 2026-11-05 con codex-cli **0.166.0** (la última;
-ya estaba instalada).
+-o out_file` (y `-C <dir>` con `--dir`). Verificado el 2026-11-20 con codex-cli **0.167.0**.
 
-- **Modelos con login ChatGPT y su cuota en Plus (mensajes/5h, OpenAI 2026-11-05):** `gpt-6-astra`
-  (II 55-57; 5-45), `gpt-6.1-sol` (II 50-55; 15-160; exige Codex ≥ 0.159.1), `gpt-6.1-terra` (**nuevo**,
-  II 42-51; 35-285; no es asiento: ver `cheap-fanout-ultimate`), `gpt-6-sol` (AA v5 ya no lo lista;
-  15-150) y `gpt-6-luna` (II 21-28; 350-3,000). II = AA v5.0.1 de high a max. GPT-5.5 salió de Codex el
-  2026-10-14. **El default de `~/.codex/config.toml` hoy es `gpt-6-luna` con esfuerzo high** (antes
-  `gpt-6-astra`): un job `codex` pelado usa Luna. **Pide siempre el modelo explícito**:
-  `codex:gpt-6.1-sol`, `codex:gpt-6-luna`.
-- **Para qué:** el asiento casi-frontier (`gpt-6.1-sol`) y código/mecánico cuando Go escasea
-  (`gpt-6-luna`, que también está en Go con 4,230 req/5h y límite 15: codex no suma un modelo,
-  suma **cuota** aparte; el ancho con Luna va por Go, `codex` es desborde). **Para qué NO:**
-  investigación web (sin web search) — eso siempre a opencode. En jobs codex, `out_file` trae solo
+- **Modelos con login ChatGPT y su cuota en Plus (mensajes/5h, OpenAI 2026-11-20):**
+  **`gpt-6.2-astra`** (**nuevo**; II 62; 6-50), **`gpt-6.2-sol`** (**nuevo**; II 57; 17-180),
+  `gpt-6.1-terra` (II 42-51; 35-285), `gpt-6.1-sol` (II 50-55; 15-160), `gpt-6-astra` (II 55-57;
+  5-45), `gpt-6-sol` (15-150) y `gpt-6-luna` (II 21-28; 350-3,000). II = AA v5.0.1 (los 6.2, a
+  esfuerzo máximo). **GPT-6.2 domina a su generación anterior en índice y en cuota**: Sol 6.2 da más
+  mensajes que Sol 6.1 y Astra 6.2 más que Astra 6; ya no hay razón para pedir `gpt-6.1-sol` ni
+  `gpt-6-astra`. `gpt-6.2-terra` **no existe** con cuenta ChatGPT (*"not supported when using Codex
+  with a ChatGPT account"*): Terra sigue en 6.1. **El default de `~/.codex/config.toml` hoy es
+  `gpt-6-astra` con esfuerzo high** (cambia seguido: el 2026-11-05 era `gpt-6-luna`): un job `codex`
+  pelado gasta la cuota más corta. **Pide siempre el modelo explícito**: `codex:gpt-6.2-sol`,
+  `codex:gpt-6.1-terra`, `codex:gpt-6-luna`.
+- **Para qué:** el asiento casi-frontier (`gpt-6.2-sol`; `gpt-6.2-astra` para la unidad más dura), la
+  segunda pre-revisión de lotes de alto impacto (`gpt-6.1-terra`, 17s) y código/mecánico cuando Go
+  escasea (`gpt-6-luna`, que también está en Go con 4,230 req/5h y límite 15: codex no suma un
+  modelo, suma **cuota** aparte). Con la bolsa compartida de Go esto pesa más que antes: **todo lo
+  caro que pueda ir por Codex no le quita nada al ancho**. **Para qué NO:** investigación web (sin
+  web search) — eso siempre a opencode — ni material del cliente. En jobs codex, `out_file` trae solo
   el mensaje final; la traza va a `out_file.log`.
 - **Sandbox:** `read-only` por default; los jobs que **editan** usan
   `CHEAP_FANOUT_CODEX_SANDBOX=workspace-write` con `--dir` a un worktree aislado, y revisas el diff.
   En Ubuntu 24.04 el sandbox necesita el perfil AppArmor `bwrap-userns-restrict`: sin él, **ni
   `read-only` lee archivos** (`bwrap … Failed RTM_NEWADDR`). En esta máquina ya está cargado
-  (2026-10-01; reverificado el 2026-11-05: 84/84 leyendo archivos en `read-only`). Procedimiento
+  (reverificado el 2026-11-20: tres modelos leyeron 17 archivos cada uno en `read-only`). Procedimiento
   oficial, verificación de contención, reversión e historial de versiones: `reference/codex.md`.
 
 ## K3 y Kimi — hoy solo por Go (Kimi directo pausado desde 2026-11-05)
@@ -496,12 +550,14 @@ ya estaba instalada).
 
 - **Guardrails:** K3 NUNCA en el ancho · máx 1-2 unidades por fan-out · **ya no es pre-revisor**
   (desde el 2026-11-06: ese puesto es de `codex:gpt-6.1-terra`) · su uso normal es el asiento Kimi del
-  consejo · **no es el asiento casi-frontier** (eso es `codex:gpt-6.1-sol`). Por Go es el modelo más
-  caro por token (3/15) con el límite más bajo (15 USD ⇒ 3 USD/5h, 7.50/semana): cada job de opencode
-  arranca con ~22.5K tokens de instrucciones y herramientas (~0.07 USD en K3 antes de hacer nada).
+  consejo · **no es el asiento casi-frontier** (eso es `codex:gpt-6.2-sol`). Por Go es el modelo más
+  caro por token (3/15) con el límite más bajo (15 USD; 98 req/5h): cada job de opencode arranca con
+  ~22.5K tokens de instrucciones y herramientas (~0.07 USD en K3 antes de hacer nada, **0.45% de la
+  bolsa compartida** solo por arrancar).
   Mide con `go-budget` antes de repetirlo.
   `kimi-k3.1-pro` (II 46, 2.00/10.00, 147 req/5h) es el más inteligente entre abiertos pero **lento**
   (31-38s en la extracción; 8+ min sin veredicto en una pre-revisión): solo prompts cortos, plazo `8m`.
+  Desde el 2026-11-20 el semi-quirúrgico por Go es `qwen4-max` (II 43, más barato y no se cuelga).
 - **Guardrail de latencia (vigente):** si un job K3 tarda >5 min, mátalo: un job cortado por plazo
   **se cobra pero opencode no lo registra** (`go-budget` lo subestima; el 2026-11-05 faltaron
   ~0.3-0.45 USD de un K3 vencido). Ningún job caro se cae a ti: veredicto imparseable o 429 → otro
@@ -543,8 +599,8 @@ ya estaba instalada).
   (síntesis solo de unidades OK, con URL fuente por dato)
   ===FIN===
   ```
-- **Tres presupuestos activos, misma disciplina:** Go (el ancho barato; cada modelo con su propio
-  límite) · free (solo los que no entrenan, a mano) · ChatGPT/codex (casi-frontier y desborde).
+- **Tres presupuestos activos, misma disciplina:** Go (el ancho barato; una bolsa compartida donde
+  cada modelo pesa distinto) · free (solo los que no entrenan, a mano) · ChatGPT/codex (casi-frontier y desborde).
   Kimi directo está pausado. El orquestador alterna por job en el campo `model` y conserva el
   veredicto final.
 
@@ -574,7 +630,12 @@ ya estaba instalada).
    `gemini-4-argon`, `kimi-k3.1-pro`, `minimax-m3.1-flash`, `step-5-preview`, `hy4` y dos gratuitos;
    murieron `mimo-v2.5*`, `deepseek-v4-flash*` y tres free de Go; `deepseek-v4.1-flash` subió su
    límite a 100 **y a la vez se saturó**; el índice se reescaló por tercera vez (v5.0.1); y Kimi
-   directo se pausó. Nada de eso se avisa: se descubre releyendo.
+   directo se pausó. **Y en quince días más, al 2026-11-20:** los límites por modelo pasaron a ser
+   pesos de **una bolsa compartida**; la doc dejó de publicar la tabla de límites (ahora vive en la
+   consola y en el endpoint); entraron `qwen4-max`, `hy4-flash-free` y `longcat-2.5-free`; murieron
+   `glm-5.2` y el gemelo `glm-5.3-flash-free`; `gemini-4-argon` pasó de 0 a 55 días de retención y
+   duplica su precio el 2026-12-01; `glm-5.3` tuvo una semana con límite de 500; y Codex recibió
+   GPT-6.2 (Sol 57, Astra 62). Nada de eso se avisa: se descubre releyendo.
    Hay además **DOS tablas de precios**. `opencode.ai/docs/go` = tu plan (10 USD/mes): sus precios no
    se te cobran, son la tarifa contable que consume los límites. `opencode.ai/docs/zen` =
    pay-as-you-go, dinero real. Pueden divergir mucho (el caso clásico era v4-pro, 4x más caro en
@@ -599,13 +660,13 @@ ya estaba instalada).
    locked" no era un choque de arranque: el detector del helper lo tomó por uno y reintentó tres
    veces un job sano (2026-10-01). Acota las firmas de error por forma y tamaño, no por la mera
    presencia de la frase.
-10. **Mira contra qué límite pesa cada job, no solo cuánto cuesta.** En Go cada modelo tiene su
-   propio límite mensual (15 a 100 USD): 1 USD en `kimi-k3` es 6.7% de su mes; en `deepseek-v4.1-flash`,
-   1%. El 2026-11-05 un día de pre-revisiones y consejo con K3 por Go (antes iba por Kimi directo) lo
-   llevó a ~40% de su semana y la consola de Go lo mostró como si el plan entero se agotara: la
-   barra parece reflejar el **modelo más cargado**, no la suma (inferido de los números, no
-   confirmado). Por eso el pre-revisor caro va por `codex:*` (otra cuota) y `go-budget` pone arriba
-   al modelo más cargado.
+10. **Mira cuánto PESA cada job en la bolsa, no solo cuánto cuesta.** En Go todos los modelos de
+   pago gastan de una sola bolsa y cada dólar pesa 1/límite del modelo (15 a 100 USD): 1 USD en
+   `kimi-k3`, `qwen4-max` o `claude-haiku-5-5` es 6.7% del mes; en `deepseek-v4.1-flash`, 1%. El
+   2026-11-05 un día de pre-revisiones y consejo con K3 por Go se llevó ~40% de la semana. Un modelo
+   caro ya no solo se agota a sí mismo: **le quita presupuesto al ancho**. Por eso lo caro va por
+   `codex:*` (otra cuota) o por un gratuito que no entrene, y `go-budget` muestra qué modelo se está
+   comiendo la bolsa.
 
 ## Troubleshooting
 

@@ -14,6 +14,27 @@ antes: 0.159.3 desde el 2026-10-01). Entre 0.159.3 y 0.166.0 el changelog no tra
 entró a los catálogos (0.165.0), el sandbox de Linux arranca mejor con varios archivos denegados
 (0.162.0) y los reintentos respetan el `Retry-After` del servidor (0.161.0).
 
+> **Actualización del 2026-11-20 (manda sobre lo de abajo, que se conserva como historia).**
+> Codex está en **0.167.0**. `developers.openai.com/codex/pricing` ya lista **GPT-6.2**:
+>
+> | Modelo | II (AA v5.0.1, máx.) | Mensajes/5h en Plus | Créditos por 1M (in / caché / out) |
+> |---|:--:|:--:|---|
+> | `gpt-6.2-astra` | 62 | 6-50 | 200 / 10 / 1,000 |
+> | `gpt-6.2-sol` | 57 | 17-180 | 50 / 2.5 / 250 |
+> | `gpt-6.1-terra` | 51 | 35-285 | 25 / 1.25 / 125 |
+> | `gpt-6.1-sol` | 55 | 15-160 | 50 / 2.5 / 250 |
+> | `gpt-6-astra` | 57 | 5-45 | 250 / 25 / 1,250 |
+> | `gpt-6-luna` | 28 | 350-3,000 | 2.5 / 0.25 / 12.5 |
+>
+> Los dos 6.2 respondieron PONG (8-9s) y una pre-revisión de 8 unidades leyendo 17 archivos en
+> `read-only` (Astra 48s, Sol 61s, Terra 17s; las tres 8/8). **`gpt-6.2-terra` no existe** con cuenta
+> ChatGPT ("not supported when using Codex with a ChatGPT account"). GPT-6.2 domina a la generación
+> anterior en índice y en cuota: el casi-frontier es `codex:gpt-6.2-sol`, la unidad más dura o el
+> lote crítico `codex:gpt-6.2-astra`, la pre-revisión rápida `codex:gpt-6.1-terra`. El default de
+> `~/.codex/config.toml` volvió a `gpt-6-astra` con esfuerzo `high`: pide siempre el modelo explícito.
+> `~/.codex/models_cache.json` describe a `gpt-6.1-sol` y `gpt-6-astra` como "Previous generation" y
+> **no lista los 6.2** aunque sí responden: no uses ese caché como catálogo.
+
 - **Modelos disponibles con login ChatGPT** (`developers.openai.com/codex/models`, 2026-11-05):
   `gpt-6-astra`, `gpt-6.1-sol` (contexto por defecto de 500K), `gpt-6.1-terra` (**nuevo**: exige
   Codex ≥ 0.159.0; "rápido y eficiente para escritura, visión y uso de computadora") y `gpt-6-luna`.

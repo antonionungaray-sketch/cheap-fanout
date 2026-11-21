@@ -13,7 +13,7 @@
 #     model       : una de tres formas —
 #                     <id>              → opencode run -m opencode-go/<id>   (plan Go)
 #                     <provider>/<id>   → opencode run -m <provider>/<id>    (tal cual;
-#                                         ej: opencode/glm-5.3-flash-free (gemelo free de Zen);
+#                                         ej: opencode/deepseek-v4.1-flash-free (gemelo free de Zen);
 #                                         `kimi-for-coding/*` se traduce solo a ese proveedor)
 #                     codex | codex:<m> → codex exec (suscripción ChatGPT)
 #     prompt_file : ruta a un archivo con el prompt COMPLETO y autocontenido del agente
@@ -33,16 +33,19 @@
 #   sobrevivientes. Por eso NO hace falta envolverlo en `setsid`.
 #
 # Cuota Go agotada (se maneja sola; no hay que prohibir modelos a mano):
-#   El plan Go limita por DÓLARES y, desde 2026-10-01, POR MODELO: cada uno trae un límite
-#   mensual ($60/$30/$15 en el plan Go; opencode.ai/docs/go) del que salen sus tres ventanas
-#   (5h = 20%, semana = 50%, mes = 100%). Agotar un modelo no agota a los demás, así que
-#   reintentar en otro modelo Go SÍ consigue presupuesto. Elegirlo es una decisión de calidad
+#   El plan Go limita por DÓLARES y, desde la doc del 2026-11-20, con UNA bolsa compartida
+#   entre todos los modelos de pago (opencode.ai/docs/go): cada dólar pesa 1/límite mensual
+#   del modelo, y la bolsa tiene tres ventanas (5h = 20%, semana = 50%, mes = 100%). Agotarla
+#   bloquea a TODOS los modelos de pago: reintentar en otro modelo Go de pago NO consigue
+#   presupuesto; las salidas son un gratuito que no entrene o codex. Esa decisión es de calidad
 #   y de presupuesto: la toma el orquestador con `go-budget`, no este script.
 #   Al detectar la firma del error de cuota en la salida de un job, el helper reintenta ese job
 #   UNA vez en el gemelo gratuito del MISMO modelo (opencode/<id>-free) — pero SOLO si ese
-#   gemelo no entrena con tus prompts (SAFE_FREE_TWINS). Hoy ninguno lo garantiza: la doc de
-#   Zen dice de mimo-*-free, big-pickle y otros que "collected data may be used to improve the
-#   model". Por eso el rescate está de facto apagado salvo CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1.
+#   gemelo no entrena con tus prompts (SAFE_FREE_TWINS). La lista está vacía a propósito: la doc
+#   de Zen dice de mimo-*-free, big-pickle y otros que "collected data may be used to improve
+#   the model". Al 2026-11-20 `deepseek-v4.1-flash-free` no entrena y es ZDR; habilitarlo es
+#   poner su id en SAFE_FREE_TWINS (pendiente de OK de Antonio). Mientras tanto el rescate
+#   está apagado salvo CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1.
 #     --on-quota free  (default) reintenta en un gemelo free SEGURO si existe
 #     --on-quota off             no reintenta; deja el fallo para que decidas tú
 #   Sin gemelo seguro, el job NO se sustituye por otro modelo: cambiar de modelo cambia la
@@ -249,8 +252,8 @@ if [ -n "$vetados_vistos" ]; then
   echo "cheap-fanout: MODELO VETADO — no se lanzó ningún job del lote." >&2
   printf '%s\n' "$vetados_vistos" >&2
   echo "cheap-fanout: vetados: ${VETOED// /, } (y sus gemelos -free)." >&2
-  echo "cheap-fanout: el ancho va a deepseek-v4.1-flash, minimax-m3.1-flash o glm-5.3-flash; lo quirúrgico, a codex:gpt-6.1-sol," >&2
-  echo "cheap-fanout: kimi-k3.1-pro o glm-5.3. Ver 'Modelos vetados' en el SKILL.md." >&2
+  echo "cheap-fanout: el ancho va a deepseek-v4.1-flash, minimax-m3.1-flash o glm-5.3-flash; lo quirúrgico, a codex:gpt-6.2-sol," >&2
+  echo "cheap-fanout: qwen4-max o gemini-4-argon. Ver 'Modelos vetados' en el SKILL.md." >&2
   echo "cheap-fanout: para saltarlo a propósito: CHEAP_FANOUT_ALLOW_VETOED=1" >&2
   exit 2
 fi
@@ -642,10 +645,10 @@ msg="cheap-fanout: $((total - fail))/${total} OK, ${fail} fallo(s)"
 if [ "$sincuota" -gt 0 ]; then
   msg="$msg (${sincuota} sin cuota y sin gemelo free)"
   echo "$msg" >&2
-  echo 'cheap-fanout: Go limita por DÓLARES y por MODELO (5h=20%, semana=50%, mes=100% del' >&2
-  echo 'cheap-fanout: límite mensual de cada uno: 100/60/30/20/15 USD). Corre go-budget:' >&2
-  echo "cheap-fanout:   - cada modelo tiene su propio carril: manda ese job a otro modelo Go" >&2
-  echo "cheap-fanout:   - o a un free que NO entrene (opencode/glm-5.3-flash-free, opencode/deepseek-v4.1-flash-free," >&2
+  echo 'cheap-fanout: Go tiene UNA bolsa compartida entre los modelos de pago (5h=20%, semana=50%,' >&2
+  echo 'cheap-fanout: mes=100%; cada dólar pesa 1/límite del modelo). Corre go-budget:' >&2
+  echo "cheap-fanout:   - cambiar a otro modelo de pago de Go NO libera presupuesto" >&2
+  echo "cheap-fanout:   - manda el job a un free que NO entrene (hy4-flash-free, opencode/deepseek-v4.1-flash-free," >&2
   echo "cheap-fanout:     beam-free) o a 'codex'. El rescate automático por gemelo free está apagado" >&2
   echo "cheap-fanout:     (SAFE_FREE_TWINS vacío; ver 'Modelos gratuitos' en el SKILL.md)." >&2
   exit "$fail"

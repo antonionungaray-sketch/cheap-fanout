@@ -5,6 +5,11 @@
 > necesitas ningún otro archivo. Última verificación de datos: **2026-07-14** (secciones 3 y 6:
 > 2026-08-28).
 >
+> **Aviso del 2026-11-20:** el esquema de cuota de Go volvió a cambiar (ahora es **una bolsa
+> compartida** donde cada dólar pesa 1/límite del modelo; cambiar de modelo ya no consigue
+> presupuesto), `go-budget` se reescribió para medirla y entraron GPT-6.2 en Codex, `qwen4-max` y
+> `hy4-flash-free`. Nada de eso está abajo: usa `SKILL.md` y `bin/`.
+>
 > **⚠ Foto congelada — no es la fuente vigente.** Desde entonces cambió lo siguiente y este
 > documento NO lo refleja; para lo actual usa `SKILL.md` y `bin/` de este repo (releídos el
 > **2026-10-01**): (1) el plan Go ya no tiene pozo global, los límites son **por modelo** (5h = 20%,
