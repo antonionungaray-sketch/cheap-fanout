@@ -10,12 +10,15 @@
 #
 # JOBS.tsv — un job por línea, campos separados por TAB:
 #   <model>\t<prompt_file>\t<out_file>[\t<timeout>]
-#     model       : una de tres formas —
+#     model       : una de cuatro formas —
 #                     <id>              → opencode run -m opencode-go/<id>   (plan Go)
 #                     <provider>/<id>   → opencode run -m <provider>/<id>    (tal cual;
 #                                         ej: opencode/deepseek-v4.1-flash-free (gemelo free de Zen);
 #                                         `kimi-for-coding/*` se traduce solo a ese proveedor)
 #                     codex | codex:<m> → codex exec (suscripción ChatGPT)
+#                     agy:<id>          → agy -p (cuota de Google AI Pro/Ultra; id exacto de
+#                                         `agy models`, con el esfuerzo en el id; ver el skill
+#                                         google-fanout). Requiere la atestación de telemetría.
 #     prompt_file : ruta a un archivo con el prompt COMPLETO y autocontenido del agente
 #     out_file    : ruta donde se escribe la salida de ese agente
 #     timeout     : OPCIONAL, plazo de ESE job. Sin sufijo = segundos; admite s/m/h
@@ -129,6 +132,9 @@ EMPTY_STATUS=66
 ARGV_STATUS=64
 LOCK_STATUS=75
 CAP_STATUS=76
+DENIED_STATUS=65
+# atestación de que la telemetría de Antigravity está apagada (ver el pre-vuelo de la puerta agy)
+AGY_ATTEST_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/cheap-fanout/agy-telemetry-off"
 RETRIES="${CHEAP_FANOUT_RETRIES:-3}"
 RETRY_BASE="${CHEAP_FANOUT_RETRY_BASE:-2}"
 CAP_RETRIES="${CHEAP_FANOUT_CAP_RETRIES:-2}"
@@ -136,7 +142,8 @@ CAP_RETRY_BASE="${CHEAP_FANOUT_CAP_RETRY_BASE:-10}"
 NO_WARMUP="${CHEAP_FANOUT_NO_WARMUP:-0}"
 WARM_TRIES=5
 MODELS_CACHE="$(mktemp -u "${TMPDIR:-/tmp}/cheap-fanout-models.XXXXXX")"
-trap 'rm -f "$MODELS_CACHE"' EXIT
+AGY_MODELS_CACHE="$(mktemp -u "${TMPDIR:-/tmp}/cheap-fanout-agy-models.XXXXXX")"
+trap 'rm -f "$MODELS_CACHE" "$AGY_MODELS_CACHE"' EXIT
 CODEX_SANDBOX="${CHEAP_FANOUT_CODEX_SANDBOX:-read-only}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -198,6 +205,7 @@ ALLOW_VETOED="${CHEAP_FANOUT_ALLOW_VETOED:-0}"
 bare_id() {
   local m="$1"
   m="${m#codex:}"
+  m="${m#agy:}"
   m="${m##*/}"
   m="${m%-free}"
   printf '%s' "$m"
@@ -241,7 +249,7 @@ resolve_mpath() {
 }
 
 # --- qué CLIs necesita este jobs.tsv (solo exige los que se usan) + valida los plazos ---
-need_opencode=0; need_codex=0; lineno=0; vetados_vistos=""
+need_opencode=0; need_codex=0; need_agy=0; AGY_IDS=""; lineno=0; vetados_vistos=""
 while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
   lineno=$((lineno + 1))
   model="${model%%$'\r'}"
@@ -249,6 +257,9 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
   case "$model" in
     \#*)          continue;;
     codex|codex:*) need_codex=1;;
+    agy)          echo "cheap-fanout: línea $lineno: 'agy' necesita un id: agy:<id> (lista: agy models)" >&2
+                  exit 2;;
+    agy:*)        need_agy=1; AGY_IDS="${AGY_IDS}${AGY_IDS:+ }${model#agy:}";;
     *)            need_opencode=1;;
   esac
   if [ "$ALLOW_VETOED" != 1 ] && is_vetoed "$model"; then
@@ -279,6 +290,39 @@ fi
 HAVE_TIMEOUT=1
 command -v timeout >/dev/null 2>&1 || { HAVE_TIMEOUT=0
   echo "cheap-fanout: aviso — timeout(1) no está en PATH; los jobs corren sin plazo" >&2; }
+
+# --- pre-vuelo de la puerta agy (solo si el lote trae jobs agy:) ---
+# Orden: agy en PATH → atestación de telemetría apagada → ids contra `agy models` (UNA llamada,
+# que además deja caliente el estado local de agy). Los vetos ya se revisaron arriba.
+# La atestación existe porque los términos de Antigravity (antigravity.google/terms, cláusula 5)
+# usan tus interacciones para mejorar los modelos de Google salvo que apagues "Enable Telemetry",
+# y ese ajuste se guarda en tu cuenta, no en settings.json: ningún script lo puede leer (verificado
+# el 2026-11-21: `agy -p /config` no lo muestra). Crear el archivo ES la decisión; por eso no hay
+# variable de entorno que lo salte.
+if [ "$need_agy" = 1 ]; then
+  command -v agy >/dev/null 2>&1 || { echo "cheap-fanout: agy no está en PATH" >&2; exit 2; }
+  if [ ! -e "$AGY_ATTEST_FILE" ]; then
+    { echo "cheap-fanout: FALTA LA ATESTACIÓN DE TELEMETRÍA — no se lanzó ningún job del lote."
+      echo "cheap-fanout: los términos de Antigravity usan tus interacciones para mejorar los modelos de Google"
+      echo 'cheap-fanout: salvo que apagues la telemetría. Una vez: abre `agy`, entra a /config y apaga "Enable Telemetry";'
+      echo "cheap-fanout: luego deja constancia:  mkdir -p $(dirname "$AGY_ATTEST_FILE") && date -I > $AGY_ATTEST_FILE"
+    } >&2
+    exit 2
+  fi
+  if [ "$HAVE_TIMEOUT" = 1 ]; then timeout 60 agy models > "$AGY_MODELS_CACHE" 2>/dev/null < /dev/null
+  else agy models > "$AGY_MODELS_CACHE" 2>/dev/null < /dev/null; fi
+  agy_validos="$(awk -F'\t' 'NF >= 2 && $1 != "" { print $1 }' "$AGY_MODELS_CACHE" 2>/dev/null)"
+  agy_raros=""
+  for id in $AGY_IDS; do
+    printf '%s\n' "$agy_validos" | grep -qxF -- "$id" && continue
+    case " $agy_raros " in *" $id "*) ;; *) agy_raros="${agy_raros}${agy_raros:+ }$id";; esac
+  done
+  if [ -n "$agy_raros" ]; then
+    echo "cheap-fanout: id(s) de agy desconocido(s): ${agy_raros} — no se lanzó ningún job. Válidos: $(printf '%s\n' "$agy_validos" | paste -sd, - | sed 's/,/, /g')" >&2
+    [ -n "$agy_validos" ] || echo "cheap-fanout: 'agy models' no devolvió modelos (¿sin sesión de agy o sin red?)" >&2
+    exit 2
+  fi
+fi
 
 # Tamaño máximo del prompt, que viaja como ARGUMENTO de la línea de comandos.
 # Windows (Git Bash → CreateProcess) topa en ~32 KB por línea — un prompt de 172 KB murió con
