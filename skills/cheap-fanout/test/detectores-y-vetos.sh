@@ -12,9 +12,14 @@
 #      `kimi-code-plan-cn/*` (renombre de models.dev/opencode 1.18.31), deja tal cual cualquier
 #      otra `<provider>/<id>` y prefija `opencode-go/` a un id desnudo.
 #   4. El rescate automático por cuota NO manda el job a un gemelo free que entrena con tus
-#      prompts: con SAFE_FREE_TWINS vacío, free_twin devuelve "" aunque el gemelo exista; solo
-#      CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1 lo reactiva. Y nunca toca la red: la lista de modelos
-#      se lee de un archivo de caché falso.
+#      prompts: free_twin devuelve "" para un gemelo que no está en SAFE_FREE_TWINS aunque
+#      exista; solo CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1 lo reactiva. El único gemelo de la lista
+#      (opencode/deepseek-v4.1-flash-free, habilitado el 2026-11-20) SÍ se devuelve, y solo si
+#      el proveedor aún lo lista. Nunca toca la red: la lista de modelos sale de un caché falso.
+#   6. is_quota_error distingue el error real de cuota de un informe que solo cita la frase y
+#      de un timeout; y, con un opencode FALSO en el PATH, el helper rescata un job de
+#      deepseek-v4.1-flash en su gemelo free (status 0 + .rescued), no rescata otros modelos,
+#      respeta --on-quota off y deja 77 si el gemelo también falla.
 #   5. is_capacity_error detecta la saturación del proveedor ([overloaded], [prefill_cap_refused])
 #      solo cuando es el error final de opencode, no cuando un informe la cita; y, con un opencode
 #      FALSO en el PATH, el helper reintenta el job y deja 76 si la saturación persiste.
@@ -104,6 +109,18 @@ if [ "$t" = opencode/mimo-v2.6-flash-free ]; then ok "CHEAP_FANOUT_ALLOW_TRAININ
 else bad "con el override no rescató (got '$t')"; fi
 t="$(free_twin opencode-go/kimi-k3)"
 if [ -z "$t" ]; then ok "override pero sin gemelo en la lista → sin rescate"; else bad "inventó gemelo $t"; fi
+# el gemelo habilitado: se devuelve si el proveedor lo lista, y solo entonces
+CHEAP_FANOUT_ALLOW_TRAINING_TWINS=0; load_twin
+t="$(free_twin opencode-go/deepseek-v4.1-flash)"
+if [ -z "$t" ]; then ok "gemelo seguro pero ya no listado por el proveedor → sin rescate"
+else bad "rescató en $t sin que el proveedor lo liste"; fi
+printf 'opencode/deepseek-v4.1-flash-free\nopencode/mimo-v2.6-flash-free\n' > "$WORK/models.cache"
+t="$(free_twin opencode-go/deepseek-v4.1-flash)"
+if [ "$t" = opencode/deepseek-v4.1-flash-free ]; then ok "deepseek-v4.1-flash → rescata en $t"
+else bad "no rescató deepseek-v4.1-flash en su gemelo seguro (got '$t')"; fi
+t="$(free_twin opencode-go/mimo-v2.6-flash)"
+if [ -z "$t" ]; then ok "con un gemelo seguro en la lista, el que entrena sigue fuera"
+else bad "rescató en $t, que entrena"; fi
 
 echo "== 5. saturación del proveedor (status 76) =="
 eval "$(sed -n '/^_clean()/p;/^is_capacity_error()/,/^}/p' "$HELPER")"
@@ -156,6 +173,89 @@ if [ "$(cat "$WORK/e2e.out.status")" = 0 ] && [ ! -e "$WORK/e2e.out.capretried" 
   ok "sin saturación → 1 intento, sin marcador"
 else bad "sin saturación: status=$(cat "$WORK/e2e.out.status") intentos=$(cat "$WORK/counter")"; fi
 
+echo "== 6. cuota agotada (status 77) y rescate en el gemelo free =="
+eval "$(sed -n '/^QUOTA_RE=/p;/^is_quota_error()/,/^}/p' "$HELPER")"
+QERR='\033[91m\033[1mError: \033[0mAI_APICallError: Error from provider (Console Go): Provider rate limit exceeded\n'
+printf "> build · deepseek-v4.1-flash\n$QERR" > "$WORK/q1.out"
+if is_quota_error "$WORK/q1.out" 1; then ok "error real con exit 1 → cuota"; else bad "error real con exit 1 NO detectado"; fi
+if is_quota_error "$WORK/q1.out" 0; then ok "error real al final aunque el exit sea 0 → cuota"
+else bad "error real al final con exit 0 NO detectado"; fi
+if is_quota_error "$WORK/q1.out"; then ok "error real sin exit code → cuota"; else bad "error real sin exit code NO detectado"; fi
+# un informe sano que CITA la firma a media salida (p. ej. un resumen del troubleshooting)
+{ echo '> build · x'; echo 'Si ves "Provider rate limit exceeded", la bolsa de Go se agotó.'
+  for i in $(seq 1 30); do echo "línea $i del informe"; done; echo '===FIN==='; } > "$WORK/qcita.out"
+if is_quota_error "$WORK/qcita.out" 0; then bad "informe sano que cita la firma tomado por cuota"
+else ok "informe sano (exit 0) que cita la firma → NO es cuota"; fi
+if is_quota_error "$WORK/qcita.out" 124; then bad "timeout que cita la firma tomado por cuota"
+else ok "job vencido por plazo (124) que cita la firma → NO es cuota"; fi
+if is_quota_error "$WORK/qcita.out" 1; then ok "job que falló (exit 1) con la firma → cuota"
+else bad "job fallido con la firma NO detectado"; fi
+
+# De punta a punta con un opencode FALSO: la puerta Go siempre responde "sin cuota"; el gemelo
+# free responde bien salvo FAKE_TWIN_FAILS=1. Cada llamada anota su modelo en $FAKE_LOG.
+mkdir -p "$WORK/binq"
+cat > "$WORK/binq/opencode" <<'FAKE'
+#!/usr/bin/env bash
+[ "$1" = db ] && exit 0
+if [ "$1" = models ]; then
+  printf 'opencode/deepseek-v4.1-flash-free\nopencode/mimo-v2.6-flash-free\nopencode-go/deepseek-v4.1-flash\nopencode-go/glm-5.3-flash\n'
+  exit 0
+fi
+m=""; prev=""
+for a in "$@"; do [ "$prev" = "-m" ] && m="$a"; prev="$a"; done
+echo "$m" >> "$FAKE_LOG"
+echo "> build · ${m##*/}"
+case "$m" in
+  opencode-go/*)
+    printf '\033[91m\033[1mError: \033[0mAI_APICallError: Error from provider (Console Go): Provider rate limit exceeded\n'
+    exit 1;;
+  *)
+    if [ "${FAKE_TWIN_FAILS:-0}" = 1 ]; then
+      printf '\033[91m\033[1mError: \033[0mDaily request limit reached for free models\n'; exit 1
+    fi
+    echo "PONG";;
+esac
+FAKE
+chmod +x "$WORK/binq/opencode"
+run_quota() { # $1 = modelo, resto = opciones del helper; env: FAKE_TWIN_FAILS
+  local model="$1"; shift
+  rm -f "$WORK/fake.log" "$WORK"/q.out*
+  printf '%s\t%s\t%s\t30s\n' "$model" "$WORK/p.md" "$WORK/q.out" > "$WORK/q.tsv"
+  PATH="$WORK/binq:$PATH" FAKE_LOG="$WORK/fake.log" CHEAP_FANOUT_ALLOW_TRAINING_TWINS=0 \
+    "$HELPER" --parallel 1 "$@" "$WORK/q.tsv" > "$WORK/q.stdout" 2> "$WORK/q.stderr"
+}
+calls() { tr '\n' ' ' < "$WORK/fake.log" 2>/dev/null | sed 's/ $//'; }
+
+run_quota deepseek-v4.1-flash
+if [ "$(cat "$WORK/q.out.status")" = 0 ] && [ -s "$WORK/q.out.rescued" ] \
+   && [ "$(cat "$WORK/q.out.gate")" = opencode/deepseek-v4.1-flash-free ] && grep -q PONG "$WORK/q.out" \
+   && [ "$(calls)" = "opencode-go/deepseek-v4.1-flash opencode/deepseek-v4.1-flash-free" ]; then
+  ok "deepseek sin cuota → rescatado en su gemelo free (status 0, .rescued, .gate = gemelo)"
+else bad "rescate de deepseek: status=$(cat "$WORK/q.out.status") gate=$(cat "$WORK/q.out.gate" 2>/dev/null) llamadas=[$(calls)]"; fi
+if grep -q 'rescatado' "$WORK/q.stdout" "$WORK/q.stderr"; then ok "el resumen del lote dice que hubo un rescate"
+else bad "el resumen no menciona el rescate"; fi
+
+run_quota deepseek-v4.1-flash --on-quota off
+if [ "$(cat "$WORK/q.out.status")" = 77 ] && [ "$(calls)" = "opencode-go/deepseek-v4.1-flash" ]; then
+  ok "--on-quota off → 77 y el gemelo no se llama"
+else bad "--on-quota off: status=$(cat "$WORK/q.out.status") llamadas=[$(calls)]"; fi
+
+run_quota glm-5.3-flash
+if [ "$(cat "$WORK/q.out.status")" = 77 ] && [ "$(calls)" = "opencode-go/glm-5.3-flash" ]; then
+  ok "otro modelo sin cuota (sin gemelo seguro) → 77, sin sustituirlo"
+else bad "glm-5.3-flash sin cuota: status=$(cat "$WORK/q.out.status") llamadas=[$(calls)]"; fi
+
+run_quota mimo-v2.6-flash
+if [ "$(cat "$WORK/q.out.status")" = 77 ] && [ "$(calls)" = "opencode-go/mimo-v2.6-flash" ]; then
+  ok "modelo cuyo gemelo existe pero entrena → 77, sin rescate"
+else bad "mimo-v2.6-flash sin cuota: status=$(cat "$WORK/q.out.status") llamadas=[$(calls)]"; fi
+
+FAKE_TWIN_FAILS=1 run_quota deepseek-v4.1-flash
+if [ "$(cat "$WORK/q.out.status")" = 77 ] && [ ! -e "$WORK/q.out.rescued" ] \
+   && [ "$(calls)" = "opencode-go/deepseek-v4.1-flash opencode/deepseek-v4.1-flash-free" ]; then
+  ok "el gemelo también falla (tope diario) → 77, un solo intento, sin marca de rescate"
+else bad "gemelo fallido: status=$(cat "$WORK/q.out.status") llamadas=[$(calls)]"; fi
+
 echo
-if [ "$fail" = 0 ]; then echo "PASS: detectores, vetos, alias, rescate y saturación"; exit 0; fi
+if [ "$fail" = 0 ]; then echo "PASS: detectores, vetos, alias, rescate, saturación y cuota"; exit 0; fi
 echo "FAIL: $fail comprobación(es) fallaron"; exit 1

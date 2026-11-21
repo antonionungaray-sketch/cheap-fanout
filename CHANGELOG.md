@@ -4,6 +4,44 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). L
 `.claude-plugin/plugin.json`. Para la evidencia detrás de cada cambio, ver los documentos de
 hallazgos en [`Bugs/`](Bugs/).
 
+## [1.6.1] — 2026-11-20
+
+> **Estado del release:** publicado el 2026-11-20. Cambio pedido por Antonio; implementado y probado
+> por Claude Fable 5.2 (tests locales y una corrida en vivo contra el gemelo real).
+
+### ⚠ Cambio de comportamiento
+
+1. **Rescate automático por cuota, encendido para `deepseek-v4.1-flash`.** `SAFE_FREE_TWINS` deja de
+   estar vacío: trae `opencode/deepseek-v4.1-flash-free` (doc de Zen del 2026-11-20: *"Its provider
+   follows a zero-retention policy and does not use your data for model training"*). Un job de
+   DeepSeek que choque con la cuota de Go se relanza una vez en ese gemelo y, si sale bien, termina
+   con status 0, `<out>.rescued` y `.gate` apuntando al gemelo. Ningún otro modelo se rescata ni se
+   sustituye: siguen quedando en `.status=77`, igual que si el gemelo también falla (tope diario) o
+   si se corre con `--on-quota off`. El intento en el gemelo usa el mismo plazo: un job rescatado
+   puede tardar hasta el doble.
+2. **`is_quota_error` ya no se dispara por una cita.** Antes buscaba la firma en toda la salida:
+   un informe sano que mencionara `Provider rate limit exceeded` (por ejemplo, un resumen de este
+   mismo repo) salía con 77, y con el rescate encendido además se habría re-corrido y pisado. Ahora
+   cuenta solo si el job falló (exit distinto de 0) o si la firma está en las últimas 15 líneas; un
+   job vencido por plazo (124/137) o ya marcado como saturado (76) o bloqueado (75) no es cuota.
+   **Sin verificar:** no pude provocar el error real de cuota; la firma viene del log y su forma en
+   la salida se infiere de otros errores de proveedor (`[overloaded]`, `UnknownError`).
+
+### Verificación
+
+- `test/detectores-y-vetos.sh`: **45/45** (15 nuevas: gemelo seguro listado y no listado, detector
+  de cuota con cita, timeout y exit code, y cinco casos de punta a punta con un `opencode` falso).
+- En vivo: con una envoltura que simula "sin cuota" solo en `opencode-go/deepseek-v4.1-flash`, el
+  helper rescató 2 de 2 jobs en el gemelo real (31/31 cada uno, 20s de pared, costo cero).
+
+### Por archivo
+
+- `skills/cheap-fanout/bin/cheap-fanout`: `SAFE_FREE_TWINS`, `QUOTA_RE` + `is_quota_error <out> [rc]`,
+  guarda en el sitio de llamada, cabecera y mensaje final.
+- `skills/cheap-fanout/test/detectores-y-vetos.sh`: sección 4 ampliada y sección 6 nueva.
+- `skills/cheap-fanout/SKILL.md` (*Modelos gratuitos*, *Cuota Go*), `reference/troubleshooting.md`,
+  `README.md`, `Bugs/hallazgos-2026-11-20.md` (§8 y §9), `.claude-plugin/*.json` (1.6.1).
+
 ## [1.6.0] — 2026-11-20
 
 Evidencia completa: [`Bugs/hallazgos-2026-11-20.md`](Bugs/hallazgos-2026-11-20.md).
@@ -61,7 +99,7 @@ Evidencia completa: [`Bugs/hallazgos-2026-11-20.md`](Bugs/hallazgos-2026-11-20.m
 - `skills/cheap-fanout/bin/go-budget`: reescrito (bolsa compartida, límites en vivo, semana
   calendario, `GO_PERIOD_DAY`, `GO_BUDGET_OFFLINE`).
 - `skills/cheap-fanout/bin/cheap-fanout`: solo textos (cabecera, mensaje de veto y de `.status=77`).
-  Sin cambios de lógica; `SAFE_FREE_TWINS` sigue vacío. Tests: 27/27.
+  Sin cambios de lógica; `SAFE_FREE_TWINS` sigue vacío. Tests: 30/30.
 - `skills/cheap-fanout/reference/catalogo-go.md` (tabla y lote nuevos; lo anterior queda como
   histórico), `reference/codex.md` (bloque GPT-6.2), `reference/troubleshooting.md`.
 - `skills/cheap-fanout-ultimate/SKILL.md`: asiento GPT en `codex:gpt-6.2-sol` (con `gpt-6.2-astra`

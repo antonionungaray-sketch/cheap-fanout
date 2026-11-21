@@ -140,8 +140,31 @@ falta uno con fallas semánticas.
 ## 8. Pendientes
 
 - Contrastar `go-budget` con la barra de la consola de Go (valida o tumba el esquema de bolsa).
-- Decidir si se habilita el rescate automático en `opencode/deepseek-v4.1-flash-free`
-  (`SAFE_FREE_TWINS`): con la bolsa compartida vale más que antes, pero el gemelo de GLM duró trece días.
+- ~~Decidir si se habilita el rescate automático en `opencode/deepseek-v4.1-flash-free`.~~ **Resuelto
+  el mismo 2026-11-20:** Antonio lo habilitó (1.6.1). Ver §9.
 - 2026-11-23: `glm-5.3` deja la promoción; 2026-12-01: `gemini-4-argon` duplica precio y vence el
   acuerdo ZDR mensual de DeepSeek (releer la doc).
 - Lote de pre-revisión con fallas semánticas, y probar `codex:gpt-6.2-astra` como asiento del consejo.
+
+## 9. Rescate automático en el gemelo de DeepSeek (1.6.1, mismo día)
+
+Antonio pidió habilitarlo. Cambios y evidencia:
+
+- `SAFE_FREE_TWINS="opencode/deepseek-v4.1-flash-free"`. `opencode models` (1.19.6) lista esa ruta,
+  que es la condición que `free_twin` exige antes de usarla.
+- **Detector de cuota acotado.** `is_quota_error` buscaba la firma en toda la salida, sin mirar el
+  exit code. Con el rescate apagado un falso positivo costaba un 77 sobre un job sano; encendido,
+  además re-corre el job y pisa su salida. Ahora: firma presente **y** (exit distinto de 0 **o**
+  firma en las últimas 15 líneas), y nunca en 124/137/75/76.
+- **Lo que no pude verificar:** la forma exacta del error de cuota en el `.out` y su exit code (no
+  agoté la bolsa para verlo). Los otros dos errores de proveedor vistos hoy salen al final de la
+  salida con exit 1: `Error: Upstream request failed: [overloaded] …` y un volcado JSON de 7 líneas
+  (`Error: { "name": "UnknownError", … }`). El detector cubre ambas formas.
+- **Prueba en vivo:** envoltura de `opencode` que responde la firma de cuota con exit 1 para
+  `opencode-go/deepseek-v4.1-flash` y delega todo lo demás al binario real. Dos jobs de la extracción
+  de §5 por el helper (`--parallel 2`): ambos `status=0`, `.gate=opencode/deepseek-v4.1-flash-free`,
+  `.rescued` presente, 31/31, 20s de pared, resumen "2 rescatado(s) por modelos free".
+- **Riesgos que quedan:** el gemelo es "limited time" y tiene tope diario sin cifra publicada (un
+  lote grande puede rescatar solo una parte: el resto queda en 77); y su garantía de no entrenar es
+  una frase de la doc de Zen que hay que releer en cada actualización del catálogo.
+

@@ -410,7 +410,7 @@ consola solo da la cifra de LongCat) y todos son "limited time": desaparecen sin
 | Ruta | ¿Responde? | ¿Entrena con tus prompts? | Veredicto |
 |---|---|---|---|
 | `hy4-flash-free` (Go) · `opencode/hy4-flash-free` | ✅ 17-19s, 31/31 | **No**; 0 días de retención | **Sí. El gratuito bueno de hoy** (nuevo, 2026-11-16): ancho a costo cero y pre-revisor gratis (8/8 en 44s). Texto+imagen, 1M ctx. AA no lo lista |
-| `opencode/deepseek-v4.1-flash-free` | ✅ 9-19s, 31/31 | **No**: *"Its provider follows a zero-retention policy and does not use your data for model training"* | **Sí.** El mismo caballo del ancho, gratis |
+| `opencode/deepseek-v4.1-flash-free` | ✅ 9-19s, 31/31 | **No**: *"Its provider follows a zero-retention policy and does not use your data for model training"* | **Sí.** El mismo caballo del ancho, gratis. **Es el gemelo del rescate automático** (ver abajo) |
 | `beam-free` (Go) · `opencode/beam-free` | ✅ ~20s | No entrena; **retiene 30 días**; no disponible en una lista de países que no incluye México | **Sí**, material no sensible; AA "Beam 1.0" marca II 18: solo tareas triviales |
 | `longcat-2.5-free` (Go) · `opencode/longcat-2.5-free` | ✅ 47s, 31/31 | No según la doc; **alojado en China**; **100 solicitudes al día** | Solo material público y pocas unidades (ver *LongCat* en privacidad) |
 | `opencode/glm-5.3-flash-free` | ❌ retirado el 2026-11-18 | — | **Muerto** (duró trece días como gemelo seguro) |
@@ -419,13 +419,19 @@ consola solo da la cifra de LongCat) y todos son "limited time": desaparecen sin
 | `opencode/mimo-v2.6-flash-free`, `opencode/big-pickle`, `opencode/flint-40b-free` | sin probar hoy | **Puede** ("collected data may be used") | No para material del cliente |
 | `opencode/nemotron-3.5-lightning-free`, `nemotron-3.5-super-vl-free` | sin probar | NVIDIA: "Trial use only — do not submit personal or confidential data" | No |
 
-**Consecuencia para el helper:** el rescate automático por cuota sigue **apagado** (`SAFE_FREE_TWINS`
-vacío en `bin/cheap-fanout`). Con la bolsa compartida ese rescate vale más que antes —al agotarse la
-bolsa ya no sirve cambiar a otro modelo de pago— y `deepseek-v4.1-flash-free` hoy no entrena:
-habilitarlo es un cambio de una línea que queda **pendiente de OK de Antonio** (el antecedente en
-contra: `glm-5.3-flash-free` era igual de seguro y murió en trece días). Mientras tanto, sin gemelo
-seguro el job queda en `.status=77` y decides tú; los gratuitos buenos se eligen a mano. Override solo
-con material público: `CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1`.
+**Consecuencia para el helper:** el rescate automático por cuota está **encendido para un solo
+gemelo** desde el 2026-11-20, por decisión de Antonio: `SAFE_FREE_TWINS` en `bin/cheap-fanout` trae
+`opencode/deepseek-v4.1-flash-free`. Si un job de `deepseek-v4.1-flash` choca con la cuota, el helper
+lo relanza una vez en ese gemelo: mismo modelo, cero costo, sin entrenamiento. El job termina con
+status 0, deja `<out>.rescued` y el resumen del lote lo cuenta (probado en vivo: 2 de 2 rescatados,
+31/31, en 20s). Con la bolsa compartida esto vale más que antes, porque al agotarse ya no sirve
+cambiar a otro modelo de pago. Límites del rescate: cubre **solo a DeepSeek** (cualquier otro modelo
+sin cuota queda en `.status=77` y decides tú: el helper no cambia de modelo por ti); el gemelo tiene
+tope diario, así que un lote grande puede rescatar solo una parte; y es "limited time" (el gemelo de
+GLM murió a los trece días: si este muere, el rescate deja de ocurrir sin romper nada). **En cada
+relectura del catálogo confirma que la doc de Zen siga diciendo que no entrena; si cambia, sácalo de
+`SAFE_FREE_TWINS`.** `--on-quota off` apaga el rescate en una invocación;
+`CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1` lo extiende a cualquier gemelo, solo con material público.
 
 ## Cuota Go: una bolsa compartida, ponderada por modelo (doc del 2026-11-20)
 
@@ -488,18 +494,20 @@ GO_PERIOD_DAY=9 ~/.claude/skills/cheap-fanout/bin/go-budget     # si sabes qué 
    da el % usado de la bolsa en las tres ventanas. Exit code: `0` holgado · `1` apretado (≥80% en
    alguna ventana) · `2` agotado (≥100%: ningún modelo de pago va a responder). El mes lo calcula
    como 30 días corridos salvo que le des `GO_PERIOD_DAY`: sin él, sobreestima tras renovar.
-2. **Durante el lote, el helper detecta la cuota.** Al ver la firma `Provider rate limit exceeded`
-   intenta el gemelo free del mismo modelo **solo si está en `SAFE_FREE_TWINS`** (hoy vacío: ver
-   *Modelos gratuitos*). `--on-quota off` lo desactiva del todo.
-3. **Si no hay gemelo seguro, el helper NO sustituye el modelo.** Deja el job en `.status=77`
-   ("SIN CUOTA") y te lo reporta, para que decidas tú.
+2. **Durante el lote, el helper detecta la cuota y rescata a DeepSeek.** Al ver la firma `Provider
+   rate limit exceeded` como error del job (no cuando un informe solo la cita, ni en un job vencido
+   por plazo), relanza el job en el gemelo free del mismo modelo **solo si está en
+   `SAFE_FREE_TWINS`**: hoy, `opencode/deepseek-v4.1-flash-free` (ver *Modelos gratuitos*).
+   `--on-quota off` lo desactiva del todo.
+3. **Si no hay gemelo seguro o el gemelo también falla, el helper NO sustituye el modelo.** Deja el
+   job en `.status=77` ("SIN CUOTA") y te lo reporta, para que decidas tú.
 
 **Los tres presupuestos activos, independientes entre sí** (el cuarto, Kimi directo, está pausado):
 
 | Puerta | En `jobs.tsv` | Presupuesto | Para qué |
 |---|---|---|---|
 | Go | `deepseek-v4.1-flash` | **una bolsa** para todos los modelos de pago; cada dólar pesa 1/límite (ventanas 20%/50%/100%) | el ancho, por default |
-| Free | `hy4-flash-free`, `opencode/deepseek-v4.1-flash-free`, `beam-free` | gratis, "limited time", con tope diario | el ancho sin tocar la bolsa (a mano; no hay rescate automático) |
+| Free | `hy4-flash-free`, `opencode/deepseek-v4.1-flash-free`, `beam-free` | gratis, "limited time", con tope diario | el ancho sin tocar la bolsa (a mano; por su cuenta el helper rescata únicamente a `deepseek-v4.1-flash`, en su gemelo) |
 | ChatGPT | `codex:gpt-6.2-sol` / `codex:<m>` | ventana 5h + semanal de ChatGPT | casi-frontier, pre-revisión de alto impacto, código, mecánico; **no** investigación web |
 | ~~Allegretto~~ | ~~`kimi-code-plan-cn/k3`~~ | **pausada por Antonio (2026-11-05)** | no rutear; K3 va por Go |
 
@@ -600,7 +608,7 @@ GO_PERIOD_DAY=9 ~/.claude/skills/cheap-fanout/bin/go-budget     # si sabes qué 
   ===FIN===
   ```
 - **Tres presupuestos activos, misma disciplina:** Go (el ancho barato; una bolsa compartida donde
-  cada modelo pesa distinto) · free (solo los que no entrenan, a mano) · ChatGPT/codex (casi-frontier y desborde).
+  cada modelo pesa distinto) · free (solo los que no entrenan; a mano, salvo el rescate de DeepSeek) · ChatGPT/codex (casi-frontier y desborde).
   Kimi directo está pausado. El orquestador alterna por job en el campo `model` y conserva el
   veredicto final.
 

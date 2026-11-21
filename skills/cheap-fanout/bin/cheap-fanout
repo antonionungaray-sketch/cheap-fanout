@@ -41,15 +41,18 @@
 #   y de presupuesto: la toma el orquestador con `go-budget`, no este script.
 #   Al detectar la firma del error de cuota en la salida de un job, el helper reintenta ese job
 #   UNA vez en el gemelo gratuito del MISMO modelo (opencode/<id>-free) — pero SOLO si ese
-#   gemelo no entrena con tus prompts (SAFE_FREE_TWINS). La lista está vacía a propósito: la doc
-#   de Zen dice de mimo-*-free, big-pickle y otros que "collected data may be used to improve
-#   the model". Al 2026-11-20 `deepseek-v4.1-flash-free` no entrena y es ZDR; habilitarlo es
-#   poner su id en SAFE_FREE_TWINS (pendiente de OK de Antonio). Mientras tanto el rescate
-#   está apagado salvo CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1.
+#   gemelo no entrena con tus prompts (SAFE_FREE_TWINS). Desde el 2026-11-20 la lista tiene UN
+#   gemelo, habilitado por Antonio: `opencode/deepseek-v4.1-flash-free` (no entrena y es ZDR
+#   según la doc de Zen). Los demás quedan fuera: la misma doc dice de mimo-*-free, big-pickle
+#   y otros que "collected data may be used to improve the model"; para esos el rescate solo
+#   se activa con CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1.
 #     --on-quota free  (default) reintenta en un gemelo free SEGURO si existe
 #     --on-quota off             no reintenta; deja el fallo para que decidas tú
-#   Sin gemelo seguro, el job NO se sustituye por otro modelo: cambiar de modelo cambia la
-#   calidad, y esa decisión es del orquestador. Queda con .status=77.
+#   Un job rescatado termina con status 0, deja out_file.rescued y el resumen lo cuenta. El
+#   intento en el gemelo corre con el mismo plazo, así que un job rescatado puede tardar hasta
+#   el doble. Sin gemelo seguro (cualquier otro modelo), o si el gemelo también falla (los
+#   gratuitos tienen tope diario), el job NO se sustituye por otro modelo: cambiar de modelo
+#   cambia la calidad, y esa decisión es del orquestador. Queda con .status=77.
 #   Consulta el presupuesto con el script hermano `go-budget` antes de lanzar un lote grande.
 #
 # Cada job corre:
@@ -201,15 +204,21 @@ bare_id() {
 }
 
 # --- gemelos free que SÍ se aceptan como rescate automático por cuota ---
-# La doc de Zen (2026-10-01) avisa de mimo-v2.5-free, mimo-v2.6-flash-free, big-pickle y otros:
-# "During its free period, collected data may be used to improve the model". Rescatar ahí un job
-# por falta de cuota mandaría tu material a un endpoint que entrena: el mismo motivo por el que
-# muse-spark está vetado. Por eso el rescate solo usa gemelos de esta lista, y hoy está VACÍA:
-# ningún gemelo de un modelo Go garantiza no entrenar (longcat-2.5-preview-free y
-# space-bunny-free sí, pero son modelos por derecho propio, no gemelos de nadie). Sin gemelo
-# seguro el job queda en .status=77 y decides tú. Override por invocación, solo con material
-# público: CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1.
-SAFE_FREE_TWINS=""
+# La doc de Zen avisa de mimo-v2.6-flash-free, big-pickle y otros: "During its free period,
+# collected data may be used to improve the model". Rescatar ahí un job por falta de cuota
+# mandaría tu material a un endpoint que entrena: el mismo motivo por el que muse-spark está
+# vetado. Por eso el rescate solo usa gemelos de esta lista (rutas completas, separadas por
+# espacio).
+#   opencode/deepseek-v4.1-flash-free — habilitado por Antonio el 2026-11-20. Doc de Zen de ese
+#     día: "Its provider follows a zero-retention policy and does not use your data for model
+#     training". Medido: 9-19s, 31/31 en la extracción. Es "limited time": si muere, el rescate
+#     simplemente no ocurre (.status=77). SI LA DOC DE ZEN CAMBIA ESA FRASE, SÁCALO DE AQUÍ
+#     (revísala en cada relectura del catálogo).
+# Un gemelo que no esté aquí no se usa (longcat-2.5-free y hy4-flash-free no entrenan, pero son
+# modelos por derecho propio, no gemelos de nadie: se rutean a mano). Sin gemelo seguro el job
+# queda en .status=77 y decides tú. Override por invocación, solo con material público:
+# CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1.
+SAFE_FREE_TWINS="opencode/deepseek-v4.1-flash-free"
 ALLOW_TRAINING_TWINS="${CHEAP_FANOUT_ALLOW_TRAINING_TWINS:-0}"
 
 is_vetoed() {
@@ -285,8 +294,22 @@ ARGV_PROMPT_MAX="${CHEAP_FANOUT_ARGV_MAX:-$ARGV_MAX_DEF}"
 
 # Firma exacta que emite opencode al agotarse el presupuesto Go. Verificada en el log real:
 #   error.error="AI_APICallError: Error from provider (Console Go): Provider rate limit exceeded"
+# Uso: is_quota_error <out_file> [exit code del job]
+# Acotada por la lección de la regla 9 del SKILL.md (un texto que MENCIONA un error no es ese
+# error), que importa más desde que el rescate está encendido: un positivo re-corre el job en
+# el gemelo y pisa su salida. Cuenta como cuota si la firma está y además
+#   - el job terminó con error (exit != 0), o
+#   - la firma está en las últimas 15 líneas (opencode imprime el error del proveedor al final
+#     y muere; así salen `[overloaded]` y `UnknownError`).
+# No cuenta un job que venció su plazo (124/137), ni uno que salió bien (exit 0) y solo cita
+# la frase a media salida (un informe sobre este mismo helper o su troubleshooting). No pude
+# provocar el error real para ver su exit code: por eso la cola basta aunque el exit sea 0.
+QUOTA_RE='provider rate limit exceeded|error from provider \(console go\)'
 is_quota_error() {
-  grep -qiE 'provider rate limit exceeded|error from provider \(console go\)' "$1" 2>/dev/null
+  grep -qiE "$QUOTA_RE" "$1" 2>/dev/null || return 1
+  case "${2:-}" in 124|137) return 1;; esac
+  if [ -n "${2:-}" ] && [ "$2" != 0 ]; then return 0; fi
+  sed -e 's/\x1b\[[0-9;]*m//g' "$1" 2>/dev/null | tail -n 15 | grep -qiE "$QUOTA_RE"
 }
 
 # La carrera de arranque tiene DOS cabezas y dan mensajes DISTINTOS. Hay que detectar las dos.
@@ -524,18 +547,19 @@ run_one() {
       fi
       is_capacity_error "$of" && rc="$CAP_STATUS"
 
-      # --- cuota Go agotada: desde 2026-10-01 es el límite de ESTE modelo en una de sus tres
-      # ventanas (otros modelos Go siguen con presupuesto, pero elegir cuál es decisión del
-      # orquestador). El único fallback que no cambia la calidad —el MISMO modelo— es su gemelo
-      # free (opencode/<id>-free), y solo si no entrena con tus prompts (SAFE_FREE_TWINS).
-      if is_quota_error "$of"; then
+      # --- cuota Go agotada: desde la doc del 2026-11-20 es la bolsa compartida en una de sus
+      # tres ventanas (ningún modelo de pago de Go va a responder). El único fallback que no
+      # cambia la calidad —el MISMO modelo— es su gemelo free (opencode/<id>-free), y solo si
+      # no entrena con tus prompts (SAFE_FREE_TWINS).
+      # (un job que ya quedó marcado como saturado o bloqueado por SQLite no es cuota)
+      if [ "$rc" != "$CAP_STATUS" ] && [ "$rc" != "$LOCK_STATUS" ] && is_quota_error "$of" "$rc"; then
         local twin=""
         [ "$ON_QUOTA" = free ] && twin="$(free_twin "$mpath")"
         if [ -n "$twin" ]; then
           "${tmo[@]}" opencode run --auto -m "$twin" "${dirarg[@]}" "$(cat "$pf")" \
             > "$of" 2>&1 < /dev/null; rc=$?
           echo "$twin" > "${of}.gate"
-          if is_quota_error "$of" || [ "$rc" != 0 ]; then
+          if is_quota_error "$of" "$rc" || [ "$rc" != 0 ]; then
             rc="${QUOTA_STATUS}"
           else
             # marca explícita del RESCATE: pedir un modelo free a propósito no es lo mismo que
@@ -643,14 +667,14 @@ msg="cheap-fanout: $((total - fail))/${total} OK, ${fail} fallo(s)"
 [ "$capreint" -gt 0 ]   && msg="$msg (${capreint} reintentado(s) por saturación del proveedor)"
 [ "$saturados" -gt 0 ]  && msg="$msg (${saturados} saturado(s) tras reintentar: relánzalos en otro modelo)"
 if [ "$sincuota" -gt 0 ]; then
-  msg="$msg (${sincuota} sin cuota y sin gemelo free)"
+  msg="$msg (${sincuota} sin cuota: sin gemelo free seguro, o el gemelo también falló)"
   echo "$msg" >&2
   echo 'cheap-fanout: Go tiene UNA bolsa compartida entre los modelos de pago (5h=20%, semana=50%,' >&2
   echo 'cheap-fanout: mes=100%; cada dólar pesa 1/límite del modelo). Corre go-budget:' >&2
   echo "cheap-fanout:   - cambiar a otro modelo de pago de Go NO libera presupuesto" >&2
   echo "cheap-fanout:   - manda el job a un free que NO entrene (hy4-flash-free, opencode/deepseek-v4.1-flash-free," >&2
-  echo "cheap-fanout:     beam-free) o a 'codex'. El rescate automático por gemelo free está apagado" >&2
-  echo "cheap-fanout:     (SAFE_FREE_TWINS vacío; ver 'Modelos gratuitos' en el SKILL.md)." >&2
+  echo "cheap-fanout:     beam-free) o a 'codex'. El rescate automático solo cubre a deepseek-v4.1-flash" >&2
+  echo "cheap-fanout:     (su gemelo free no entrena; ver 'Modelos gratuitos' en el SKILL.md)." >&2
   exit "$fail"
 fi
 if [ "$vacios" -gt 0 ]; then

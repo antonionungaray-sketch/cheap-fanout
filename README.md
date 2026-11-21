@@ -112,13 +112,14 @@ el plan Go tiene **una sola bolsa** para todos los modelos de pago: cada dólar 
 consume 1/límite de la bolsa mensual (límites de 100, 60, 30, 20 o 15 USD según el modelo), con
 ventanas de 5 horas (20%), semana (50%) y mes (100%). Agotarla bloquea a todos los modelos de pago:
 cambiar de modelo ya no consigue presupuesto. Al detectar el error de cuota, el dispatcher **no**
-sustituye el modelo —es una decisión de calidad y es del orquestador— y deja `.status=77`. Su rescate
-automático en el gemelo `opencode/<id>-free` está **apagado**: cuando se decidió, la doc de Zen
-avisaba que esos gemelos "may use collected data to improve the model", el mismo motivo por el que
-`muse-spark` está vetado. Al 2026-11-20 `deepseek-v4.1-flash-free` no entrena (y `hy4-flash-free` es
-un gratuito sin entrenamiento dentro de Go); habilitar el rescate en el helper queda pendiente de
-confirmación (`CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1` lo reactiva para cualquier gemelo, solo con
-material público).
+cambia de modelo —es una decisión de calidad y es del orquestador—, con una sola excepción que no
+cambia la calidad: si el job era de `deepseek-v4.1-flash`, lo relanza una vez en su gemelo gratuito
+`opencode/deepseek-v4.1-flash-free` (mismo modelo, sin entrenamiento según la doc de Zen del
+2026-11-20) y lo marca con `<salida>.rescued`. Cualquier otro modelo, o un gemelo que también falle,
+queda en `.status=77`. El rescate se limita a una lista corta (`SAFE_FREE_TWINS`) porque la doc de Zen
+avisa que otros gemelos "may use collected data to improve the model", el mismo motivo por el que
+`muse-spark` está vetado; `--on-quota off` lo apaga y `CHEAP_FANOUT_ALLOW_TRAINING_TWINS=1` lo
+extiende a cualquier gemelo, solo con material público.
 
 **La carrera de arranque de SQLite no te alcanza.** Varios `opencode` arrancando a la vez contra
 una base **fría** se pelean por crearla y migrarla: el perdedor muere con `database is locked` (o
