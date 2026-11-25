@@ -499,6 +499,175 @@ free_twin() {
   case " $SAFE_FREE_TWINS " in *" $cand "*) echo "$cand";; *) echo "";; esac
 }
 
+# ==================================================================================================
+# Puerta agy (Google Antigravity CLI, `agy -p` headless). Spec y evidencia:
+# docs/superpowers/specs/2026-11-21-google-fanout-design.md. El out_file recibe SOLO la respuesta
+# final (como codex); la traza NDJSON (--output-format stream-json) queda en <out>.log y stderr en
+# <out>.err. Se fuerza en CADA job, sin importar el settings.json del usuario (--settings aplica solo
+# a esa corrida; verificado el 2026-11-21):
+#   useG1Credits:false             ningún job paga AI credits (dinero real) aunque se agote la cuota
+#   allowNonWorkspaceAccess:false  el agente no ve nada fuera de su workspace
+#   agentMode:auto                 comandos en el sandbox de agy; lo que pida aprobación se SOFT-DENIEGA
+#   permissions.deny write_file(*) solo lectura (default; en agy las ediciones son write_file).
+#                                  CHEAP_FANOUT_AGY_WRITE=1 lo quita para jobs que editan (con --dir
+#                                  a un worktree aislado)
+# El soft-deny es la trampa de esta puerta: agy sale con exit 0 y `status: SUCCESS`, a veces con la
+# respuesta VACÍA, y solo lo dice en stderr ("…permission that headless mode cannot prompt for, so it
+# was auto-denied"). Por eso un soft-deny siempre es fallo (.status=65) aunque haya respuesta.
+# ==================================================================================================
+agy_settings_json() {
+  if [ "${CHEAP_FANOUT_AGY_WRITE:-0}" = 1 ]; then
+    printf '%s' '{"useG1Credits":false,"allowNonWorkspaceAccess":false,"agentMode":"auto"}'
+  else
+    printf '%s' '{"useG1Credits":false,"allowNonWorkspaceAccess":false,"agentMode":"auto","permissions":{"deny":["write_file(*)"]}}'
+  fi
+}
+
+# Plazo interno de agy: un poco MENOS que el del job, para que agy corte limpio, con respuesta
+# parcial y exit 3, antes de que timeout(1) lo mate a ciegas. ≥60s: resta 20s; si no, max(2, s/4).
+agy_print_timeout() {
+  local t="${1:-}" n secs m pt
+  [ -n "$t" ] || { echo ""; return 0; }
+  n="${t%[smh]}"
+  case "$t" in
+    *h) secs=$((n * 3600));;
+    *m) secs=$((n * 60));;
+    *)  secs=$n;;
+  esac
+  if [ "$secs" -ge 60 ]; then m=20; else m=$((secs / 4)); [ "$m" -lt 2 ] && m=2; fi
+  pt=$((secs - m)); [ "$pt" -lt 1 ] && pt=1
+  echo "${pt}s"
+}
+
+# Lee el ÚLTIMO evento `result` del NDJSON de agy, escribe su `response` en <out_file> e imprime
+# `status<TAB>finished_reason<TAB>error`. Exit 0 si hubo result; 1 si no (incluye log vacío o
+# inexistente: agy murió antes de responder); 2 si hay JSON pero ninguna línea con `event`
+# (formato no reconocido: agy se autoactualiza y podría cambiarlo).
+agy_parse_result() {
+  python3 -I - "$1" "$2" <<'PY'
+import json, sys
+src, out = sys.argv[1], sys.argv[2]
+saw_json = saw_event = False
+res = None
+try:
+    fh = open(src, encoding="utf-8", errors="replace")
+except OSError:
+    sys.exit(1)
+with fh:
+    for line in fh:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict):
+            continue
+        saw_json = True
+        if "event" not in e:
+            continue
+        saw_event = True
+        if e.get("event") == "result" and isinstance(e.get("result"), dict):
+            res = e["result"]
+if res is None:
+    sys.exit(2 if (saw_json and not saw_event) else 1)
+resp = res.get("response")
+if not isinstance(resp, str):
+    resp = "" if resp is None else json.dumps(resp, ensure_ascii=False)
+with open(out, "w", encoding="utf-8") as f:
+    f.write(resp)
+def clean(v):
+    return str(v if v is not None else "").replace("\t", " ").replace("\r", " ").replace("\n", " ")
+print("\t".join([clean(res.get("status")), clean(res.get("finished_reason")), clean(res.get("error"))]))
+PY
+}
+
+# Permisos que agy negó en headless (soft-deny), únicos y uno por línea; "desconocido" si el aviso
+# está pero no nombra el permiso; nada si no hubo soft-deny.
+agy_denied_perms() {
+  [ -s "$1" ] || return 0
+  grep -q 'auto-denied' "$1" 2>/dev/null || return 0
+  local p
+  p="$(grep -oE 'required the "[a-z_]+" permission' "$1" 2>/dev/null | sed -E 's/.*"([a-z_]+)".*/\1/' | sort -u)"
+  if [ -n "$p" ]; then printf '%s\n' "$p"; else echo desconocido; fi
+}
+
+# Un job agy completo. Regresa el .status (spec 5.1; gana el primero que aplique):
+#   65 soft-deny · 124/137 plazo · 66 respuesta vacía · sin result / formato raro · rc de agy · 0
+run_agy() {
+  local id="$1" pf="$2" of="$3" tspec="$4"
+  rm -f "${of}.denied" "${of}.quota"
+  echo "agy:$id" > "${of}.gate"
+  # el prompt se lee ANTES del cd: las rutas de jobs.tsv son relativas al cwd del helper
+  local prompt; prompt="$(cat "$pf")"
+  # workspace: un temporal VACÍO y propio del job, que se borra al terminar. Nunca el cwd del helper,
+  # que podría ser el repo de un cliente: --dir es la única forma de mostrarle archivos a Google.
+  local ws own_ws=0
+  if [ -n "$REPO" ]; then
+    ws="$REPO"
+  else
+    ws="$(mktemp -d "${TMPDIR:-/tmp}/cheap-fanout-agy.XXXXXX")" || {
+      echo "[cheap-fanout] FALLO: no pude crear el workspace temporal de agy" > "$of"; return 1; }
+    own_ws=1
+  fi
+  local pt ptarg=() tmo=()
+  pt="$(agy_print_timeout "$tspec")"
+  [ -n "$pt" ] && ptarg=(--print-timeout "$pt")
+  [ -n "$tspec" ] && [ "$HAVE_TIMEOUT" = 1 ] && tmo=(timeout --signal=TERM --kill-after="$KILL_AFTER" "$tspec")
+
+  local rc=0
+  # las redirecciones van FUERA del subshell: se resuelven contra el cwd del helper, no contra ws
+  ( cd "$ws" && exec "${tmo[@]}" agy -p "$prompt" --model "$id" --output-format stream-json \
+      "${ptarg[@]}" --settings "$(agy_settings_json)" ) < /dev/null > "${of}.log" 2> "${of}.err" || rc=$?
+  [ "$own_ws" = 1 ] && rm -rf "$ws"
+
+  : > "$of"
+  local info prc=0 rst="" rfr="" rer=""
+  info="$(agy_parse_result "${of}.log" "$of")" || prc=$?
+  [ "$prc" = 0 ] && IFS=$'\t' read -r rst rfr rer <<< "$info"
+  local body; body="$(tr -d '[:space:]' < "$of" | head -c 1)"
+
+  local denied; denied="$(agy_denied_perms "${of}.err")"
+  [ -n "$denied" ] && printf '%s\n' "$denied" > "${of}.denied"
+  local timed=0
+  case "$rc" in 3|124|137) timed=1;; esac
+  [ "$rfr" = print_timeout ] && timed=1
+
+  # una nota por cada condición detectada
+  if [ -n "$denied" ]; then
+    printf '\n[cheap-fanout] DENEGADO: agy negó en headless el permiso %s (soft-deny: la corrida siguió).\n' \
+      "$(printf '%s' "$denied" | paste -sd, - | sed 's/,/, /g')" >> "$of"
+    printf 'La respuesta de arriba puede estar incompleta; revisa %s.err y %s.denied.\n' "$of" "$of" >> "$of"
+  fi
+  if [ "$timed" = 1 ]; then
+    case "$rc" in
+      124|137) printf '\n[cheap-fanout] TIMEOUT: el job excedió %s y fue terminado (exit %s).\n' "$tspec" "$rc" >> "$of";;
+      *)       printf '\n[cheap-fanout] TIMEOUT: agy cortó el turno con --print-timeout %s (plazo del job: %s); la respuesta de arriba es PARCIAL.\n' \
+                 "$pt" "$tspec" >> "$of";;
+    esac
+  fi
+  if [ "$prc" = 1 ]; then
+    { printf '\n[cheap-fanout] FALLO: sin evento result en la salida de agy (exit %s); traza en %s.log. Cola de %s.err:\n' "$rc" "$of" "$of"
+      tail -n 20 "${of}.err" 2>/dev/null; } >> "$of"
+  elif [ "$prc" = 2 ]; then
+    { printf '\n[cheap-fanout] FALLO: formato de agy no reconocido (ninguna línea con "event" en %s.log; ¿se actualizó agy?). Cola de %s.err:\n' "$of" "$of"
+      tail -n 20 "${of}.err" 2>/dev/null; } >> "$of"
+  elif [ "$timed" = 0 ] && [ "$rc" != 0 ]; then
+    printf '\n[cheap-fanout] FALLO: agy salió con exit %s (status %s): %s\n' "$rc" "${rst:-?}" "${rer:-sin detalle; ver .err}" >> "$of"
+  elif [ "$timed" = 0 ] && [ -z "$body" ]; then
+    printf '\n[cheap-fanout] SALIDA VACÍA: agy terminó sin respuesta (exit 0, status %s). Revisa %s.err.\n' "${rst:-?}" "$of" >> "$of"
+  fi
+
+  if [ -n "$denied" ]; then return "$DENIED_STATUS"; fi
+  if [ "$timed" = 1 ]; then [ "$rc" = 137 ] && return 137; return 124; fi
+  if [ "$prc" = 0 ] && [ "$rc" = 0 ] && [ -z "$body" ]; then return "$EMPTY_STATUS"; fi
+  if [ "$prc" != 0 ]; then [ "$rc" != 0 ] && return "$rc"; return 1; fi
+  if [ "$rc" != 0 ]; then return "$rc"; fi
+  [ "$rst" = SUCCESS ] || return 1     # un result que no es SUCCESS con exit 0 no es OK
+  return 0
+}
+
 run_one() {
   local model="$1" pf="$2" of="$3" tspec="$4"
   rm -f "${of}.retried" "${of}.capretried"   # marcadores de una corrida anterior
@@ -527,6 +696,10 @@ run_one() {
   # fd 0 del `while read < jobs.tsv` y se come las líneas restantes → solo corre el primer
   # lote de --parallel. (codex exec además lee stdin como prompt y se colgaría.)
   case "$model" in
+    agy:*)
+      # la puerta agy hace su propio post-proceso (estados, notas, workspace): sale directo
+      run_agy "${model#agy:}" "$pf" "$of" "$tspec"
+      return $?;;
     codex|codex:*)
       local marg=()
       case "$model" in codex:*) marg=(-m "${model#codex:}");; esac
