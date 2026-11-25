@@ -75,6 +75,19 @@ case "$esc" in
 print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "x" * 2000000}}))';;
   pwd)            python3 -I -c 'import json, os
 print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": os.getcwd() + "\n" + str(len(os.listdir(".")))}}))';;
+  cuota)          result ERROR "" "" "Quota exhausted for model $model"
+                  echo "AGY_ERROR: {\"short_error\":\"Quota exhausted for model $model\",\"status\":\"RESOURCE_EXHAUSTED\",\"retryable\":false,\"reason\":\"quota_exhausted\"}" >&2
+                  exit 1;;
+  transitorio)    # falla mientras el contador sea menor que FAKE_AGY_FAIL_TIMES; luego se porta como ok
+                  n="$(cat "${FAKE_AGY_COUNTER:-/dev/null}" 2>/dev/null)"; n="${n:-0}"
+                  if [ "$n" -lt "${FAKE_AGY_FAIL_TIMES:-0}" ]; then
+                    [ -n "${FAKE_AGY_COUNTER:-}" ] && echo $((n + 1)) > "$FAKE_AGY_COUNTER"
+                    result ERROR "" "" "backend unavailable"
+                    echo 'AGY_ERROR: {"short_error":"backend unavailable","status":"UNAVAILABLE","retryable":true,"reason":"unavailable"}' >&2
+                    exit 1
+                  fi
+                  init; result SUCCESS "RESPUESTA-OK";;
+  auth)           echo "error: authentication required" >&2; exit 1;;
   *)              echo "fake-agy: escenario desconocido: '$esc'" >&2; exit 99;;
 esac
 exit 0

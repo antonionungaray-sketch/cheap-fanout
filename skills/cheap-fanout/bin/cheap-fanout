@@ -143,7 +143,11 @@ NO_WARMUP="${CHEAP_FANOUT_NO_WARMUP:-0}"
 WARM_TRIES=5
 MODELS_CACHE="$(mktemp -u "${TMPDIR:-/tmp}/cheap-fanout-models.XXXXXX")"
 AGY_MODELS_CACHE="$(mktemp -u "${TMPDIR:-/tmp}/cheap-fanout-agy-models.XXXXXX")"
-trap 'rm -f "$MODELS_CACHE" "$AGY_MODELS_CACHE"' EXIT
+# caché por lote de `agy-budget --model <id>` (confirmación de cuota agotada); se crea al usarse
+AGY_CACHE_DIR="$(mktemp -u "${TMPDIR:-/tmp}/cheap-fanout-agy-cache.XXXXXX")"
+trap 'rm -f "$MODELS_CACHE" "$AGY_MODELS_CACHE"; rm -rf "$AGY_CACHE_DIR"' EXIT
+# script hermano que lee la cuota de Google (bin/agy-budget); si falta, la cuota no se confirma
+AGY_BUDGET="$(cd "$(dirname "$0")" && pwd)/agy-budget"
 CODEX_SANDBOX="${CHEAP_FANOUT_CODEX_SANDBOX:-read-only}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -593,46 +597,139 @@ agy_denied_perms() {
   if [ -n "$p" ]; then printf '%s\n' "$p"; else echo desconocido; fi
 }
 
+# Campo del ÚLTIMO `AGY_ERROR: {json}` de stderr. agy lo imprime al fallar; forma verificada con el
+# plazo: {"short_error":…,"status":"DEADLINE_EXCEEDED","retryable":false,"reason":"print_timeout"}.
+# Los booleanos salen como true/false.
+agy_error_field() {
+  [ -s "$1" ] || return 0
+  local line; line="$(grep -E '^AGY_ERROR: \{' "$1" 2>/dev/null | tail -n 1)"
+  [ -n "$line" ] || return 0
+  python3 -I -c 'import json, sys
+try:
+    d = json.loads(sys.argv[1][len("AGY_ERROR: "):])
+except ValueError:
+    sys.exit(0)
+v = d.get(sys.argv[2]) if isinstance(d, dict) else None
+if v is not None:
+    print(json.dumps(v) if isinstance(v, bool) else v)' "$line" "$2"
+}
+
+# ¿Parece cuota agotada? FIRMA SIN VERIFICAR contra un error real (no lo pude provocar): el binario
+# de agy 1.5.14 contiene "Quota exhausted" y su doc interna lo describe como `RESOURCE_EXHAUSTED`,
+# 429. Por la regla 9 del SKILL.md (un texto que MENCIONA un error no es ese error) solo mira los
+# campos de error —AGY_ERROR y result.error—, nunca la respuesta, y exige exit ≠ 0 y que agy no lo
+# marque como reintentable. Aun así, run_agy lo confirma con /usage antes de dar 77.
+is_agy_quota_sig() {
+  [ "${3:-0}" != 0 ] || return 1
+  [ "$(agy_error_field "$1" retryable)" = true ] && return 1
+  local rerr txt
+  rerr="$(python3 -I -c 'import json, sys
+err = ""
+try:
+    for l in open(sys.argv[1], encoding="utf-8", errors="replace"):
+        l = l.strip()
+        if not l.startswith("{"):
+            continue
+        try:
+            e = json.loads(l)
+        except ValueError:
+            continue
+        if isinstance(e, dict) and e.get("event") == "result" and isinstance(e.get("result"), dict):
+            err = str(e["result"].get("error") or "")
+except OSError:
+    pass
+print(err)' "$2" 2>/dev/null)"
+  txt="$(agy_error_field "$1" short_error) $(agy_error_field "$1" status) $(agy_error_field "$1" reason) $rerr"
+  printf '%s' "$txt" | grep -qiE 'RESOURCE_EXHAUSTED|(^|[^0-9])429([^0-9]|$)|quota'
+}
+
+# Confirma con /usage (bin/agy-budget) que la bolsa de <id> está agotada. Si lo está, imprime
+# `bolsa<TAB>ventana<TAB>reset_local` de la primera fila en 0% y regresa 0; en cualquier otro caso
+# (bolsa con saldo, agy-budget ausente, /usage ilegible) regresa 1. Cacheado por id durante el lote:
+# /usage tarda ~2 s y varios jobs pueden chocar con la cuota a la vez.
+agy_confirm_exhausted() {
+  local id="$1" c tmp brc
+  mkdir -p "$AGY_CACHE_DIR" 2>/dev/null || return 1
+  c="$AGY_CACHE_DIR/usage-$id"
+  if [ ! -f "$c.rc" ]; then
+    tmp="$(mktemp "$c.XXXXXX")" || return 1
+    brc=0
+    if [ -x "$AGY_BUDGET" ]; then "$AGY_BUDGET" --model "$id" --tsv > "$tmp" 2>/dev/null || brc=$?
+    else brc=3; fi
+    mv -f "$tmp" "$c.tsv"
+    printf '%s\n' "$brc" > "$tmp.rc" && mv -f "$tmp.rc" "$c.rc"
+  fi
+  [ "$(cat "$c.rc" 2>/dev/null)" = 2 ] || return 1
+  awk -F'\t' '$3 == 0 { print $1 "\t" $2 "\t" $5; exit }' "$c.tsv"
+  return 0
+}
+
 # Un job agy completo. Regresa el .status (spec 5.1; gana el primero que aplique):
-#   65 soft-deny · 124/137 plazo · 66 respuesta vacía · sin result / formato raro · rc de agy · 0
+#   65 soft-deny · 124/137 plazo · 77 cuota confirmada · 76 transitorio · 66 respuesta vacía ·
+#   sin result / formato raro · rc de agy · 0
 run_agy() {
   local id="$1" pf="$2" of="$3" tspec="$4"
   rm -f "${of}.denied" "${of}.quota"
   echo "agy:$id" > "${of}.gate"
   # el prompt se lee ANTES del cd: las rutas de jobs.tsv son relativas al cwd del helper
   local prompt; prompt="$(cat "$pf")"
-  # workspace: un temporal VACÍO y propio del job, que se borra al terminar. Nunca el cwd del helper,
-  # que podría ser el repo de un cliente: --dir es la única forma de mostrarle archivos a Google.
-  local ws own_ws=0
-  if [ -n "$REPO" ]; then
-    ws="$REPO"
-  else
-    ws="$(mktemp -d "${TMPDIR:-/tmp}/cheap-fanout-agy.XXXXXX")" || {
-      echo "[cheap-fanout] FALLO: no pude crear el workspace temporal de agy" > "$of"; return 1; }
-    own_ws=1
-  fi
   local pt ptarg=() tmo=()
   pt="$(agy_print_timeout "$tspec")"
   [ -n "$pt" ] && ptarg=(--print-timeout "$pt")
   [ -n "$tspec" ] && [ "$HAVE_TIMEOUT" = 1 ] && tmo=(timeout --signal=TERM --kill-after="$KILL_AFTER" "$tspec")
+  local writing=0; [ "${CHEAP_FANOUT_AGY_WRITE:-0}" = 1 ] && writing=1
 
-  local rc=0
-  # las redirecciones van FUERA del subshell: se resuelven contra el cwd del helper, no contra ws
-  ( cd "$ws" && exec "${tmo[@]}" agy -p "$prompt" --model "$id" --output-format stream-json \
-      "${ptarg[@]}" --settings "$(agy_settings_json)" ) < /dev/null > "${of}.log" 2> "${of}.err" || rc=$?
-  [ "$own_ws" = 1 ] && rm -rf "$ws"
+  local rc prc info rst rfr rer body denied timed quota_row transient cap_attempt=0 ws own_ws
+  while :; do
+    # workspace: un temporal VACÍO y propio de cada intento, que se borra al terminar. Nunca el cwd
+    # del helper, que podría ser el repo de un cliente: --dir es la única forma de mostrarle archivos.
+    own_ws=0
+    if [ -n "$REPO" ]; then
+      ws="$REPO"
+    else
+      ws="$(mktemp -d "${TMPDIR:-/tmp}/cheap-fanout-agy.XXXXXX")" || {
+        echo "[cheap-fanout] FALLO: no pude crear el workspace temporal de agy" > "$of"; return 1; }
+      own_ws=1
+    fi
+    rc=0
+    # las redirecciones van FUERA del subshell: se resuelven contra el cwd del helper, no contra ws
+    ( cd "$ws" && exec "${tmo[@]}" agy -p "$prompt" --model "$id" --output-format stream-json \
+        "${ptarg[@]}" --settings "$(agy_settings_json)" ) < /dev/null > "${of}.log" 2> "${of}.err" || rc=$?
+    [ "$own_ws" = 1 ] && rm -rf "$ws"
 
-  : > "$of"
-  local info prc=0 rst="" rfr="" rer=""
-  info="$(agy_parse_result "${of}.log" "$of")" || prc=$?
-  [ "$prc" = 0 ] && IFS=$'\t' read -r rst rfr rer <<< "$info"
-  local body; body="$(tr -d '[:space:]' < "$of" | head -c 1)"
+    : > "$of"
+    prc=0; rst=""; rfr=""; rer=""
+    info="$(agy_parse_result "${of}.log" "$of")" || prc=$?
+    [ "$prc" = 0 ] && IFS=$'\t' read -r rst rfr rer <<< "$info"
+    body="$(tr -d '[:space:]' < "$of" | head -c 1)"
+    denied="$(agy_denied_perms "${of}.err")"
+    timed=0
+    case "$rc" in 3|124|137) timed=1;; esac
+    [ "$rfr" = print_timeout ] && timed=1
 
-  local denied; denied="$(agy_denied_perms "${of}.err")"
+    # ¿cuota agotada o error transitorio? (no aplica si hubo soft-deny o plazo)
+    quota_row=""; transient=0
+    if [ -z "$denied" ] && [ "$timed" = 0 ] && [ "$rc" != 0 ]; then
+      if is_agy_quota_sig "${of}.err" "${of}.log" "$rc"; then
+        # la firma no está verificada contra un error real: /usage decide si es cuota o transitorio
+        quota_row="$(agy_confirm_exhausted "$id")" || { quota_row=""; transient=1; }
+      elif [ "$(agy_error_field "${of}.err" retryable)" = true ]; then
+        transient=1
+      fi
+    fi
+    # un job que escribe nunca se reintenta solo: un fallo tardío pudo dejar cambios a medias
+    if [ "$transient" = 1 ] && [ "$writing" = 0 ] && [ "$cap_attempt" -lt "$CAP_RETRIES" ]; then
+      cap_attempt=$((cap_attempt + 1))
+      sleep "$(cap_backoff_secs "$cap_attempt")"
+      continue
+    fi
+    break
+  done
+  [ "$cap_attempt" -gt 0 ] && printf '%s\n' "$cap_attempt" > "${of}.capretried"
   [ -n "$denied" ] && printf '%s\n' "$denied" > "${of}.denied"
-  local timed=0
-  case "$rc" in 3|124|137) timed=1;; esac
-  [ "$rfr" = print_timeout ] && timed=1
+  [ -n "$quota_row" ] && printf '%s\n' "$quota_row" > "${of}.quota"
+  local auth=0
+  if grep -qi 'authentication required' "${of}.err" 2>/dev/null || printf '%s' "$rer" | grep -qi 'authentication required'; then auth=1; fi
 
   # una nota por cada condición detectada
   if [ -n "$denied" ]; then
@@ -647,6 +744,24 @@ run_agy() {
                  "$pt" "$tspec" >> "$of";;
     esac
   fi
+  if [ -n "$quota_row" ]; then
+    local qb qv qr; IFS=$'\t' read -r qb qv qr <<< "$quota_row"
+    printf '\n[cheap-fanout] CUOTA: la bolsa "%s" (%s) de Google está agotada; se resetea %s.\n' "$qb" "$qv" "$qr" >> "$of"
+    printf 'Sin rescate: espera el reset (agy-budget te dice cuándo) o manda el job a otra puerta.\n' >> "$of"
+  fi
+  if [ "$transient" = 1 ]; then
+    local why; why="$(agy_error_field "${of}.err" status): $(agy_error_field "${of}.err" short_error)"
+    if [ "$writing" = 1 ]; then
+      printf '\n[cheap-fanout] SATURADO: error transitorio de agy (%s); NO se reintentó porque es un job de escritura (pudo dejar cambios a medias).\n' "$why" >> "$of"
+    else
+      printf '\n[cheap-fanout] SATURADO: agy siguió fallando con un error transitorio (%s) tras %s reintento(s). Relánzalo más tarde o en otro modelo.\n' "$why" "$cap_attempt" >> "$of"
+    fi
+  elif [ "$cap_attempt" -gt 0 ]; then
+    printf '\n[cheap-fanout] SATURADO: agy falló con un error transitorio; se rescató tras %s reintento(s).\n' "$cap_attempt" >> "$of"
+  fi
+  if [ "$auth" = 1 ]; then
+    printf '\n[cheap-fanout] SIN SESIÓN: agy no tiene sesión iniciada; corre `agy` una vez en modo interactivo.\n' >> "$of"
+  fi
   if [ "$prc" = 1 ]; then
     { printf '\n[cheap-fanout] FALLO: sin evento result en la salida de agy (exit %s); traza en %s.log. Cola de %s.err:\n' "$rc" "$of" "$of"
       tail -n 20 "${of}.err" 2>/dev/null; } >> "$of"
@@ -654,13 +769,17 @@ run_agy() {
     { printf '\n[cheap-fanout] FALLO: formato de agy no reconocido (ninguna línea con "event" en %s.log; ¿se actualizó agy?). Cola de %s.err:\n' "$of" "$of"
       tail -n 20 "${of}.err" 2>/dev/null; } >> "$of"
   elif [ "$timed" = 0 ] && [ "$rc" != 0 ]; then
-    printf '\n[cheap-fanout] FALLO: agy salió con exit %s (status %s): %s\n' "$rc" "${rst:-?}" "${rer:-sin detalle; ver .err}" >> "$of"
+    if [ -z "$quota_row" ] && [ "$transient" = 0 ]; then
+      printf '\n[cheap-fanout] FALLO: agy salió con exit %s (status %s): %s\n' "$rc" "${rst:-?}" "${rer:-sin detalle; ver .err}" >> "$of"
+    fi
   elif [ "$timed" = 0 ] && [ -z "$body" ]; then
     printf '\n[cheap-fanout] SALIDA VACÍA: agy terminó sin respuesta (exit 0, status %s). Revisa %s.err.\n' "${rst:-?}" "$of" >> "$of"
   fi
 
   if [ -n "$denied" ]; then return "$DENIED_STATUS"; fi
   if [ "$timed" = 1 ]; then [ "$rc" = 137 ] && return 137; return 124; fi
+  if [ -n "$quota_row" ]; then return "$QUOTA_STATUS"; fi
+  if [ "$transient" = 1 ]; then return "$CAP_STATUS"; fi
   if [ "$prc" = 0 ] && [ "$rc" = 0 ] && [ -z "$body" ]; then return "$EMPTY_STATUS"; fi
   if [ "$prc" != 0 ]; then [ "$rc" != 0 ] && return "$rc"; return 1; fi
   if [ "$rc" != 0 ]; then return "$rc"; fi
@@ -836,7 +955,7 @@ wait
 
 # --- contar fallos releyendo los .status ---
 fail=0; total=0; timedout=0; sincuota=0; rescatados=0; vacios=0; largos=0; lockeados=0; reintentados=0
-saturados=0; capreint=0
+saturados=0; capreint=0; denegados=0; sincuota_agy=0
 while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
   model="${model%%$'\r'}"
   [ -z "${model:-}" ] && continue
@@ -860,8 +979,16 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
        fi;;
     124|137) fail=$((fail + 1)); timedout=$((timedout + 1))
              echo "cheap-fanout: TIMEOUT (status=$s) → $of" >&2;;
-    "$QUOTA_STATUS") fail=$((fail + 1)); sincuota=$((sincuota + 1))
-             echo "cheap-fanout: SIN CUOTA (status=$s) → $of" >&2;;
+    "$QUOTA_STATUS") fail=$((fail + 1))
+             case "$(cat "${of}.gate" 2>/dev/null)" in
+               agy:*) sincuota_agy=$((sincuota_agy + 1))
+                      IFS=$'\t' read -r qb qv qr < "${of}.quota" 2>/dev/null || { qb="?"; qv="?"; qr="?"; }
+                      echo "cheap-fanout: SIN CUOTA DE GOOGLE (status=$s) → $of: bolsa \"$qb\" ($qv) agotada; se resetea $qr" >&2;;
+               *)     sincuota=$((sincuota + 1))
+                      echo "cheap-fanout: SIN CUOTA (status=$s) → $of" >&2;;
+             esac;;
+    "$DENIED_STATUS") fail=$((fail + 1)); denegados=$((denegados + 1))
+             echo "cheap-fanout: DENEGADO (status=$s) → $of: agy negó $(paste -sd, "${of}.denied" 2>/dev/null | sed 's/,/, /g') en headless; revisa ${of}.err y ${of}.denied" >&2;;
     "$EMPTY_STATUS") fail=$((fail + 1)); vacios=$((vacios + 1))
              echo "cheap-fanout: SALIDA VACÍA (status=$s) → $of" >&2;;
     "$ARGV_STATUS") fail=$((fail + 1)); largos=$((largos + 1))
@@ -872,6 +999,11 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
              echo "cheap-fanout: PROVEEDOR SATURADO (status=$s) → $of" >&2;;
     *) fail=$((fail + 1)); echo "cheap-fanout: FALLÓ (status=$s) → $of" >&2;;
   esac
+  # sesión de agy vencida: falla con su propio código (nunca 77) y se dice cómo arreglarlo
+  if [ "$s" != 0 ] && [ -s "${of}.err" ] && grep -q '^agy:' "${of}.gate" 2>/dev/null \
+     && grep -qi 'authentication required' "${of}.err" 2>/dev/null; then
+    echo "cheap-fanout: SIN SESIÓN DE AGY → $of: corre \`agy\` una vez en modo interactivo para iniciar sesión." >&2
+  fi
 done < "$JOBS"
 
 msg="cheap-fanout: $((total - fail))/${total} OK, ${fail} fallo(s)"
@@ -883,6 +1015,11 @@ msg="cheap-fanout: $((total - fail))/${total} OK, ${fail} fallo(s)"
 [ "$lockeados" -gt 0 ]  && msg="$msg (${lockeados} bloqueado(s) por SQLite)"
 [ "$capreint" -gt 0 ]   && msg="$msg (${capreint} reintentado(s) por saturación del proveedor)"
 [ "$saturados" -gt 0 ]  && msg="$msg (${saturados} saturado(s) tras reintentar: relánzalos en otro modelo)"
+[ "$denegados" -gt 0 ]  && msg="$msg (${denegados} con acciones denegadas: revisa .err y .denied)"
+[ "$sincuota_agy" -gt 0 ] && msg="$msg (${sincuota_agy} sin cuota de Google)"
+if [ "$sincuota_agy" -gt 0 ]; then
+  echo 'cheap-fanout: la cuota de Google no se rescata: espera el reset (agy-budget te dice cuándo) o manda esos jobs a otra puerta.' >&2
+fi
 if [ "$sincuota" -gt 0 ]; then
   msg="$msg (${sincuota} sin cuota: sin gemelo free seguro, o el gemelo también falló)"
   echo "$msg" >&2

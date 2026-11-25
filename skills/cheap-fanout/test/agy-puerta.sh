@@ -31,7 +31,11 @@ cat > "$WORK/bin/opencode" <<'FAKE'
 echo "opencode $*" >> "${FAKE_OC_LOG:-/dev/null}"
 case "${1:-}" in
   db|models) exit 0;;
-  run) echo "> build · fake"; echo "OK"; exit 0;;
+  run) echo "> build · fake"
+       case "$*" in
+         *OC_CUOTA*) echo "Error: AI_APICallError: Error from provider (Console Go): Provider rate limit exceeded"; exit 1;;
+       esac
+       echo "OK"; exit 0;;
 esac
 exit 0
 FAKE
@@ -51,7 +55,7 @@ run_batch() {
   printf '%s\n' "$@" > "$WORK/run/jobs.tsv"
   ( cd "$WORK/run" && PATH="$WORK/bin:$TEST/fake-agy:$PATH" XDG_CONFIG_HOME="$WORK/cfg" \
       FAKE_AGY_LOG="$WORK/agy.log" FAKE_AGY_MODELS="$WORK/models.txt" FAKE_OC_LOG="$WORK/oc.log" \
-      CHEAP_FANOUT_NO_WARMUP=1 "$HELPER" --timeout 30s "${EXTRA[@]}" jobs.tsv > "$WORK/stdout" 2> "$WORK/err" ) || rc=$?
+      CHEAP_FANOUT_NO_WARMUP=1 "${HELPER_ALT:-$HELPER}" --timeout 30s "${EXTRA[@]}" jobs.tsv > "$WORK/stdout" 2> "$WORK/err" ) || rc=$?
   EXTRA=()
   echo "$rc"
 }
@@ -65,11 +69,13 @@ for l in open(sys.argv[1]):
         print(a[a.index(sys.argv[2]) + 1] if sys.argv[2] in a else "<ausente>")
         break' "$WORK/agy.log" "$1"
 }
-p_field() { # campo (cwd | ls) de cada invocación "agy -p", uno por línea (ls como JSON)
+p_field() { # campo (cwd | ls) de cada JOB "agy -p <prompt>", uno por línea (ls como JSON); ignora
+            # los comandos de barra como "/usage", que agy-budget lanza al confirmar una cuota
   python3 -I -c 'import json, sys
 for l in open(sys.argv[1]):
     e = json.loads(l)
-    if e["argv"][:1] == ["-p"]:
+    a = e["argv"]
+    if a[:1] == ["-p"] and len(a) > 1 and not a[1].startswith("/"):
         print(e[sys.argv[2]] if sys.argv[2] == "cwd" else json.dumps(e[sys.argv[2]]))' "$WORK/agy.log" "$1"
 }
 prompt() { printf 'ESCENARIO=%s\nTarea de prueba.\n' "$1" > "$WORK/run/p-$1.md"; }
@@ -240,6 +246,72 @@ if grep -q "2/2 OK" "$WORK/err" && [ "$(cat "$(outf mx-agy.out).gate" 2>/dev/nul
    && [ "$(cat "$(outf mx-go.out).gate" 2>/dev/null)" = "opencode-go/deepseek-v4.1-flash" ]; then
   ok "lote mixto Go + agy → 2/2 OK, cada job por su puerta"
 else bad "lote mixto → $(tail -1 "$WORK/err"); gates '$(cat "$(outf mx-go.out).gate" 2>/dev/null)' y '$(cat "$(outf mx-agy.out).gate" 2>/dev/null)'"; fi
+
+echo "== 3. cuota, transitorios, sesión y resumen =="
+attest
+export CHEAP_FANOUT_CAP_RETRY_BASE=1
+mk_usage() { # % restante de: gemini 5h, gemini semana, claude 5h, claude semana, argon semana
+  {
+    printf 'Gemini Models\tFive Hour Limit Remaining\t%s%%\t2026-11-21T23:48:17Z\n' "$1"
+    printf 'Gemini Models\tWeekly Limit Remaining\t%s%%\t2026-11-28T18:48:17Z\n' "$2"
+    printf 'Claude and GPT models\tFive Hour Limit Remaining\t%s%%\t2026-11-21T23:48:33Z\n' "$3"
+    printf 'Claude and GPT models\tWeekly Limit Remaining\t%s%%\t2026-11-28T18:48:33Z\n' "$4"
+    printf 'Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t%s%%\t2026-11-28T18:48:33Z\n' "$5"
+  } > "$WORK/usage.tsv"
+}
+export FAKE_AGY_USAGE="$WORK/usage.tsv" FAKE_AGY_COUNTER="$WORK/counter"
+for e in cuota transitorio auth softdeny-resp; do prompt "$e"; done
+n_p() { p_field cwd | wc -l | tr -d ' '; }   # cuántas invocaciones "agy -p" hubo
+
+mk_usage 0 99 94 97 99
+run_batch "agy:$H	p-cuota.md	q.out" > /dev/null
+if [ "$(st q.out)" = 77 ] && grep -qP '^Gemini Models\t5h\t' "$(outf q.out).quota" 2>/dev/null \
+   && grep -qF "[cheap-fanout] CUOTA" "$(outf q.out)" && grep -q "SIN CUOTA DE GOOGLE" "$WORK/err" && ! grep -q "Go tiene UNA bolsa" "$WORK/err"; then
+  ok "cuota + bolsa Gemini 5h en 0% → 77, .quota, nota CUOTA y mensaje propio (sin el de Go)"
+else bad "cuota confirmada → $(st q.out), .quota '$(cat "$(outf q.out).quota" 2>/dev/null)', err: $(grep -E 'CUOTA|Go tiene' "$WORK/err" | head -2)"; fi
+
+mk_usage 50 50 50 50 50
+run_batch "agy:$H	p-cuota.md	q2.out" > /dev/null
+if [ "$(st q2.out)" = 76 ] && [ "$(n_p)" = 3 ]; then ok "cuota sin confirmar en /usage → transitorio: 3 intentos y 76"
+else bad "cuota sin confirmar → $(st q2.out) con $(n_p) intento(s)"; fi
+
+mkdir -p "$WORK/bin2"; cp "$HELPER" "$WORK/bin2/cheap-fanout"
+mk_usage 0 99 94 97 99
+HELPER_ALT="$WORK/bin2/cheap-fanout" run_batch "agy:$H	p-cuota.md	q3.out" > /dev/null
+if [ "$(st q3.out)" = 76 ]; then ok "cuota con bin/ sin agy-budget → no se puede confirmar → 76"
+else bad "cuota sin agy-budget → $(st q3.out)"; fi
+
+echo 0 > "$WORK/counter"
+FAKE_AGY_FAIL_TIMES=1 run_batch "agy:$H	p-transitorio.md	t1.out" > /dev/null
+if [ "$(st t1.out)" = 0 ] && [ "$(cat "$(outf t1.out).capretried" 2>/dev/null)" = 1 ]; then ok "transitorio que se recupera → 0 y .capretried = 1"
+else bad "transitorio FAIL_TIMES=1 → $(st t1.out), .capretried '$(cat "$(outf t1.out).capretried" 2>/dev/null)'"; fi
+
+echo 0 > "$WORK/counter"
+FAKE_AGY_FAIL_TIMES=9 run_batch "agy:$H	p-transitorio.md	t9.out" > /dev/null
+if [ "$(st t9.out)" = 76 ] && [ "$(n_p)" = 3 ] && grep -qF "[cheap-fanout] SATURADO" "$(outf t9.out)"; then ok "transitorio persistente → 3 intentos, 76 y nota SATURADO"
+else bad "transitorio FAIL_TIMES=9 → $(st t9.out) con $(n_p) intento(s)"; fi
+
+echo 0 > "$WORK/counter"
+FAKE_AGY_FAIL_TIMES=9 CHEAP_FANOUT_AGY_WRITE=1 run_batch "agy:$H	p-transitorio.md	tw.out" > /dev/null
+if [ "$(st tw.out)" = 76 ] && [ "$(n_p)" = 1 ]; then ok "transitorio en modo escritura → 1 solo intento y 76"
+else bad "transitorio en escritura → $(st tw.out) con $(n_p) intento(s)"; fi
+
+run_batch "agy:$H	p-auth.md	au.out" > /dev/null
+if [ "$(st au.out)" = 1 ] && grep -qF "[cheap-fanout] SIN SESIÓN" "$(outf au.out)" && grep -q "SIN SESIÓN DE AGY" "$WORK/err"; then
+  ok "sesión vencida → 1 (nunca 77), nota SIN SESIÓN y pista en el resumen"
+else bad "auth → $(st au.out), err: $(grep -i sesi "$WORK/err" | head -1)"; fi
+
+printf 'OC_CUOTA\n' > "$WORK/run/p-occuota.md"
+mk_usage 0 99 94 97 99
+EXTRA=(--on-quota off); run_batch "glm-5.3-flash	p-occuota.md	go.out" "agy:$H	p-cuota.md	ag.out" > /dev/null
+if [ "$(st go.out)" = 77 ] && [ "$(st ag.out)" = 77 ] && grep -q "Go tiene UNA bolsa" "$WORK/err" && grep -q "SIN CUOTA DE GOOGLE" "$WORK/err"; then
+  ok "lote con 77 de Go y de Google → mensajes de las dos bolsas"
+else bad "dos bolsas → go $(st go.out), agy $(st ag.out); err: $(grep -cE 'Go tiene|GOOGLE' "$WORK/err") líneas"; fi
+
+rc="$(run_batch "agy:$H	p-softdeny-resp.md	dn.out")"
+if [ "$rc" = 1 ] && grep -qF "(1 con acciones denegadas" "$WORK/err" && grep -q "DENEGADO (status=65)" "$WORK/err"; then
+  ok "soft-deny en el resumen: exit 1, 'DENEGADO (status=65)' y '(1 con acciones denegadas'"
+else bad "resumen del soft-deny → exit $rc: $(tail -2 "$WORK/err")"; fi
 
 echo
 if [ "$fail" = 0 ]; then echo "PASS: puerta agy"; exit 0; fi
