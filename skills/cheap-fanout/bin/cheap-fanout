@@ -75,6 +75,11 @@
 #       out_file.capretried  solo si hubo reintentos por saturación del proveedor: cuántos
 #       out_file.gate     qué modelo/puerta lo sirvió realmente
 #       out_file.rescued  solo si hubo rescate por cuota: "<modelo original>\t<gemelo free>"
+#       (jobs agy:) out_file.log  traza NDJSON de `agy -p --output-format stream-json`
+#                   out_file.err  stderr de agy (AGY_ERROR, avisos de soft-deny)
+#                   out_file.denied  permisos que agy negó en headless (.status=65)
+#                   out_file.quota   bolsa<TAB>ventana<TAB>reset de la cuota de Google agotada (.status=77)
+#       .status=65   (solo agy) soft-deny: agy negó una acción que pedía aprobación; siempre es fallo
 #   - Carrera de SQLite al arrancar (diagnosticada 2026-09-11; verificada leyendo el bundle de
 #     opencode 1.18.29 local Y el binario de Windows x64 1.18.25, idénticos): opencode abre su
 #     base así —
