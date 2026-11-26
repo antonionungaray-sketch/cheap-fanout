@@ -21,7 +21,8 @@ for r in exp:
     try: req=int(re.sub(r'[^0-9]','',p[2])); lim=int(re.sub(r'[^0-9]','',p[3]))
     except ValueError: bad.append(r['name']+':num'); continue
     q1=p[4].strip().strip('"“”'); q2=p[5].strip().strip('"“”')
-    if req==r['req'] and lim==r['lim'] and q1 and q1 in src and q2 and q2 in src: ok+=1
+    # cada cita debe ser la de SU fila (no basta con que aparezca en algún lado del documento)
+    if req==r['req'] and lim==r['lim'] and q1 == r['nota'] and q2 == r['origen']: ok+=1
     else: bad.append(f"{r['name']}:{req}/{lim}")
 fin='===FIN===' in txt
 print(f"{ok}/{len(exp)} FIN={'si' if fin else 'NO'} malos={bad[:4]}")

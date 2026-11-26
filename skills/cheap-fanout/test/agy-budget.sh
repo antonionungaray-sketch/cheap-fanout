@@ -15,7 +15,7 @@ set -uo pipefail
 
 TEST="$(cd "$(dirname "$0")" && pwd)"
 BUDGET="$TEST/../bin/agy-budget"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/agy-budget-test.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/agy-budget-test.XXXXXX")" || { echo "FAIL: no pude crear el temporal"; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 fail=0
 ok()  { printf '   ✔ %s\n' "$1"; }
@@ -85,6 +85,12 @@ if [ "$rc" = 3 ]; then ok "/usage con error → exit 3"; else bad "/usage con er
 printf 'Algo salió mal\nintenta más tarde\n' > "$WORK/usage.tsv"; expect_rc "/usage sin filas que parseen" 3
 rc=0; PATH="/usr/bin:/bin" "$BUDGET" > /dev/null 2>&1 || rc=$?
 if [ "$rc" = 3 ]; then ok "sin agy en el PATH → exit 3"; else bad "sin agy en el PATH → exit $rc"; fi
+
+printf 'Gemini Models\tFive Hour Limit Remaining\t9x%%\t2026-11-21T23:48:17Z\nGemini Models\tWeekly Limit Remaining\t99%%\t2026-11-28T18:48:17Z\n' > "$WORK/usage.tsv"
+expect_rc "fila de una bolsa conocida que no parsea → lectura incompleta" 3
+expect_rc "ídem con --model gemini-4-hydrogen-low" 3 --model gemini-4-hydrogen-low
+rc=0; PATH="$TEST/fake-agy:$PATH" FAKE_AGY_USAGE="$WORK/usage.tsv" timeout 10 "$BUDGET" --model > /dev/null 2>&1 || rc=$?
+if [ "$rc" = 3 ]; then ok "--model sin id → exit 3 (sin colgarse)"; else bad "--model sin id → exit $rc (124 = se colgó)"; fi
 
 echo "== 5. modo humano y --quiet =="
 mk_usage 98 99 94 97 99

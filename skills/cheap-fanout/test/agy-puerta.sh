@@ -19,7 +19,8 @@ set -uo pipefail
 TEST="$(cd "$(dirname "$0")" && pwd)"
 HELPER="$TEST/../bin/cheap-fanout"
 [ -x "$HELPER" ] || { echo "FAIL: no encuentro el helper en $HELPER"; exit 1; }
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/agy-puerta-test.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/agy-puerta-test.XXXXXX")" || { echo "FAIL: no pude crear el temporal"; exit 1; }
+[ -d "$WORK" ] || { echo "FAIL: temporal inválido"; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 fail=0
 ok()  { printf '   ✔ %s\n' "$1"; }
@@ -160,7 +161,7 @@ if [ "$(arg_after --model)" = "$H" ] && [ "$(arg_after --output-format)" = strea
   ok "argv: --model, --output-format stream-json y --settings de solo lectura exacto"
 else bad "argv: model '$(arg_after --model)', formato '$(arg_after --output-format)', settings '$(arg_after --settings)'"; fi
 
-CHEAP_FANOUT_AGY_WRITE=1 run_batch "agy:$H	p-ok.md	rw.out" > /dev/null
+mkdir -p "$WORK/wt"; EXTRA=(--dir "$WORK/wt"); CHEAP_FANOUT_AGY_WRITE=1 run_batch "agy:$H	p-ok.md	rw.out" > /dev/null
 if [ "$(arg_after --settings)" = "$RW" ]; then ok "CHEAP_FANOUT_AGY_WRITE=1 → --settings de escritura exacto"
 else bad "escritura: settings '$(arg_after --settings)'"; fi
 
@@ -292,7 +293,7 @@ if [ "$(st t9.out)" = 76 ] && [ "$(n_p)" = 3 ] && grep -qF "[cheap-fanout] SATUR
 else bad "transitorio FAIL_TIMES=9 → $(st t9.out) con $(n_p) intento(s)"; fi
 
 echo 0 > "$WORK/counter"
-FAKE_AGY_FAIL_TIMES=9 CHEAP_FANOUT_AGY_WRITE=1 run_batch "agy:$H	p-transitorio.md	tw.out" > /dev/null
+mkdir -p "$WORK/wt"; EXTRA=(--dir "$WORK/wt"); FAKE_AGY_FAIL_TIMES=9 CHEAP_FANOUT_AGY_WRITE=1 run_batch "agy:$H	p-transitorio.md	tw.out" > /dev/null
 if [ "$(st tw.out)" = 76 ] && [ "$(n_p)" = 1 ]; then ok "transitorio en modo escritura → 1 solo intento y 76"
 else bad "transitorio en escritura → $(st tw.out) con $(n_p) intento(s)"; fi
 
@@ -312,6 +313,59 @@ rc="$(run_batch "agy:$H	p-softdeny-resp.md	dn.out")"
 if [ "$rc" = 1 ] && grep -qF "(1 con acciones denegadas" "$WORK/err" && grep -q "DENEGADO (status=65)" "$WORK/err"; then
   ok "soft-deny en el resumen: exit 1, 'DENEGADO (status=65)' y '(1 con acciones denegadas'"
 else bad "resumen del soft-deny → exit $rc: $(tail -2 "$WORK/err")"; fi
+
+echo "== 4. arreglos de la revisión final =="
+attest
+for e in resp-objeto deny-duro auth-result; do prompt "$e"; done
+all_cwds() { python3 -I -c 'import json, sys
+for l in open(sys.argv[1]): print(json.loads(l)["cwd"])' "$WORK/agy.log"; }
+
+# CDPATH no debe desviar el --dir relativo
+mkdir -p "$WORK/run/lote" "$WORK/otro/lote"
+EXTRA=(--dir lote); CDPATH="$WORK/otro" run_batch "agy:$H	p-pwd.md	cdp.out" > /dev/null
+if [ "$(p_field cwd | head -1)" = "$WORK/run/lote" ]; then ok "--dir relativo con CDPATH → el lote del cwd, no el de CDPATH"
+else bad "CDPATH desvió --dir a '$(p_field cwd | head -1)'"; fi
+
+# las llamadas auxiliares (agy models, agy -p /usage de agy-budget) no corren en el cwd del helper
+mk_usage 0 99 94 97 99
+run_batch "agy:$H	p-cuota.md	aux.out" > /dev/null
+en_cwd="$(all_cwds | grep -cxF "$WORK/run")"
+if [ "$en_cwd" = 0 ] && [ "$(all_cwds | wc -l | tr -d ' ')" -ge 3 ]; then ok "ninguna llamada a agy (models, /usage, job) corre en el cwd del helper"
+else bad "$en_cwd llamada(s) a agy corrieron en el cwd del helper"; fi
+
+# modo escritura sin --dir: el entregable se perdería en el temporal → pre-vuelo
+rc="$(CHEAP_FANOUT_AGY_WRITE=1 run_batch "agy:$H	p-ok.md	wnd.out")"
+if [ "$rc" = 2 ] && grep -q "requiere --dir" "$WORK/err" && [ "$(n_p)" = 0 ]; then ok "CHEAP_FANOUT_AGY_WRITE=1 sin --dir → exit 2 sin lanzar"
+else bad "escritura sin --dir → exit $rc: $(head -c 160 "$WORK/err")"; fi
+
+# una response que no es texto no es OK
+run_batch "agy:$H	p-resp-objeto.md	ro.out" > /dev/null
+if [ "$(st ro.out)" != 0 ] && grep -q "formato de agy no reconocido" "$(outf ro.out)"; then ok "response no textual → fallo 'formato de agy no reconocido'"
+else bad "response {} → $(st ro.out)"; fi
+
+# deny DURO (regla deny, la herramienta falla en la traza con exit 0) → 65 como el soft-deny
+run_batch "agy:$H	p-deny-duro.md	dd.out" > /dev/null
+if [ "$(st dd.out)" = 65 ] && [ "$(cat "$(outf dd.out).denied" 2>/dev/null)" = write_file ]; then ok "deny duro en la traza → 65, .denied = write_file"
+else bad "deny duro → $(st dd.out), .denied '$(cat "$(outf dd.out).denied" 2>/dev/null)'"; fi
+
+# sesión vencida dicha solo en result.error (stderr vacío): el campo vacío no debe correr los demás
+run_batch "agy:$H	p-auth-result.md	ar.out" > /dev/null
+if grep -qF "[cheap-fanout] SIN SESIÓN" "$(outf ar.out)" && grep -q "SIN SESIÓN DE AGY" "$WORK/err"; then ok "sesión vencida solo en result.error → nota y pista"
+else bad "auth en result.error → status $(st ar.out); err: $(grep -c 'SIN SESIÓN' "$WORK/err")"; fi
+
+# ids vacíos o con comodines
+rc="$(run_batch "agy:	p-ok.md	vacio-id.out")"
+if [ "$rc" = 2 ] && [ "$(n_p)" = 0 ]; then ok "'agy:' con id vacío → exit 2"; else bad "'agy:' vacío → exit $rc, $(n_p) jobs lanzados"; fi
+rc="$(run_batch "agy:gemini-*	p-ok.md	glob.out")"
+if [ "$rc" = 2 ] && grep -qF "gemini-*" "$WORK/err" && [ "$(n_p)" = 0 ]; then ok "'agy:gemini-*' → exit 2, sin expandir el comodín"
+else bad "'agy:gemini-*' → exit $rc"; fi
+
+# sin HOME: un lote sin jobs agy no debe tronar por la ruta de la atestación
+rc=0; ( cd "$WORK/run" && printf 'deepseek-v4.1-flash\tp-ok.md\tnohome.out\n' > jobs-nh.tsv && \
+  env -u HOME -u XDG_CONFIG_HOME PATH="$WORK/bin:$TEST/fake-agy:$PATH" CHEAP_FANOUT_NO_WARMUP=1 \
+  "$HELPER" jobs-nh.tsv > /dev/null 2> "$WORK/err-nh" ) || rc=$?
+if [ "$rc" = 0 ] && ! grep -q "unbound variable" "$WORK/err-nh"; then ok "sin HOME, lote de Go → corre (exit 0)"
+else bad "sin HOME → exit $rc: $(head -c 160 "$WORK/err-nh")"; fi
 
 echo
 if [ "$fail" = 0 ]; then echo "PASS: puerta agy"; exit 0; fi

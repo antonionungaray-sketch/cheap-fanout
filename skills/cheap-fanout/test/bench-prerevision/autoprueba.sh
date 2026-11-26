@@ -3,7 +3,7 @@
 # 8 unidades, y su calificador cuenta aciertos, falsos OK, falsas alarmas y ===FIN===. COSTO: cero.
 set -uo pipefail
 D="$(cd "$(dirname "$0")" && pwd)"; E="$D/../bench-extraccion"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/bench-prerevision.XXXXXX")"; trap 'rm -rf "$WORK"' EXIT
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/bench-prerevision.XXXXXX")" || { echo "FAIL: no pude crear el temporal"; exit 1; }; trap 'rm -rf "$WORK"' EXIT
 fail=0; ok() { printf '   ✔ %s\n' "$1"; }; bad() { printf '   ✘ %s\n' "$1"; fail=$((fail + 1)); }
 mkdir -p "$WORK/fx" && python3 -I "$E/gen.py" "$WORK/fx"
 python3 -I "$D/sembrar.py" "$WORK/fx" "$WORK/a" && python3 -I "$D/sembrar.py" "$WORK/fx" "$WORK/b"

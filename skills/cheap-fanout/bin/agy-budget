@@ -42,7 +42,8 @@ set -uo pipefail
 MODEL=""; TSV=0; QUIET=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --model)   MODEL="${2:-}"; shift 2;;
+    --model)   [ $# -ge 2 ] && [ -n "$2" ] || { echo "agy-budget: --model necesita un id" >&2; exit 3; }
+               MODEL="$2"; shift 2;;
     --tsv)     TSV=1; shift;;
     --quiet|-q) QUIET=1; shift;;
     -h|--help) awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit 0;;
@@ -69,14 +70,27 @@ fi
 
 command -v agy >/dev/null 2>&1 || { say "agy-budget: agy no está en PATH"; exit 3; }
 HAVE_TIMEOUT=0; command -v timeout >/dev/null 2>&1 && HAVE_TIMEOUT=1
-agy_cmd() { if [ "$HAVE_TIMEOUT" = 1 ]; then timeout 30 agy -p "$1" < /dev/null; else agy -p "$1" < /dev/null; fi; }
+# las consultas corren en un directorio VACÍO: agy nunca recibe el cwd de quien llama como workspace
+AUX="$(mktemp -d "${TMPDIR:-/tmp}/agy-budget.XXXXXX")" || { say "agy-budget: no pude crear un temporal"; exit 3; }
+trap 'rm -rf "$AUX"' EXIT
+agy_cmd() {
+  if [ "$HAVE_TIMEOUT" = 1 ]; then ( CDPATH= cd -- "$AUX" && timeout 30 agy -p "$1" < /dev/null )
+  else ( CDPATH= cd -- "$AUX" && agy -p "$1" < /dev/null ); fi
+}
 
 raw="$(agy_cmd /usage 2>/dev/null)" || { say "agy-budget: 'agy -p /usage' falló (¿sin sesión? corre 'agy' una vez en modo interactivo)"; exit 3; }
 
-# filas válidas: exactamente 4 campos con TAB y el tercero como NN%
-rows=""
+# filas válidas: exactamente 4 campos con TAB y el tercero como NN%. Una fila que parece de cuota
+# (trae "Limit" en la etiqueta) pero no parsea vuelve INCOMPLETA la lectura: agy se autoactualiza y
+# un formato nuevo no debe pasar por "holgada" con media información.
+rows=""; corrupta=0
 while IFS=$'\t' read -r pool label pct reset extra; do
-  [[ "$pct" =~ ^[0-9]+%$ ]] || continue
+  if [[ ! "$pct" =~ ^[0-9]+%$ ]] || [ -z "$reset" ] || [ -n "${extra:-}" ]; then
+    case "$label" in
+      *Limit*) if [ -z "$POOLS" ] || printf '%s\n' "$POOLS" | grep -qxF "$pool"; then corrupta=1; fi;;
+    esac
+    continue
+  fi
   [ -n "$pool" ] && [ -n "$label" ] && [ -n "$reset" ] && [ -z "${extra:-}" ] || continue
   if [ -n "$POOLS" ] && ! printf '%s\n' "$POOLS" | grep -qxF "$pool"; then continue; fi
   case "$label" in
@@ -92,6 +106,10 @@ while IFS=$'\t' read -r pool label pct reset extra; do
   rows="${rows}${pool}"$'\t'"${win}"$'\t'"${pct%\%}"$'\t'"${reset}"$'\t'"${local_t}"$'\n'
 done <<< "$raw"
 
+if [ "$corrupta" = 1 ]; then
+  say "agy-budget: /usage trajo filas de cuota que no reconozco (¿cambió el formato de agy?); no doy una lectura parcial"
+  exit 3
+fi
 if [ -z "$rows" ]; then
   say "agy-budget: /usage no trajo filas reconocibles${MODEL:+ para $MODEL} (¿cambió el formato de agy?)"
   exit 3

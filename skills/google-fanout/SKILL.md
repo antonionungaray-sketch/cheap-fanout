@@ -1,6 +1,7 @@
 ---
 name: google-fanout
-description: Use when vayas a mandar trabajo barato por Google Antigravity —el CLI `agy`, jobs `agy:<id>` del helper de cheap-fanout—, en estos casos. Investigación web SIN URL de arranque (agy trae search_web). El ancho cuando la bolsa de Go está apretada o agotada. Un pre-revisor o una opinión casi-frontier (Gemini 4 Neon, Carbon). Una segunda opinión de la familia Claude sin gastar el plan Max. Triggers: agy, Antigravity, Gemini 4, Neon, Carbon, Argon, Hydrogen, Orchestrator, "cuota de Google", agy-budget, "investigar sin URL". NO para material del cliente o sensible.
+description: >-
+  Use when vayas a mandar trabajo barato por Google Antigravity —el CLI `agy`, jobs `agy:<id>` del helper de cheap-fanout—, en estos casos. Investigación web SIN URL de arranque (agy trae search_web). El ancho cuando la bolsa de Go está apretada o agotada. Un pre-revisor o una opinión casi-frontier (Gemini 4 Neon, Carbon). Una segunda opinión de la familia Claude sin gastar el plan Max. Triggers: agy, Antigravity, Gemini 4, Neon, Carbon, Argon, Hydrogen, Orchestrator, "cuota de Google", agy-budget, "investigar sin URL". NO para material del cliente o sensible.
 ---
 
 # google-fanout — la puerta Google (agy) de cheap-fanout
@@ -73,7 +74,10 @@ B=~/.claude/skills/cheap-fanout/bin
 
 ## Mecánica que cambia tus prompts
 
-- **El agente ve solo su workspace.**
+- **El agente trabaja en su workspace, pero el sandbox también le deja LEER y ESCRIBIR los
+  temporales del sistema (`/tmp`).** Medido el 2026-11-26: leyó un señuelo en `/tmp`; uno en
+  `$HOME` ni siquiera existía para él. **Nunca dejes material sensible en `/tmp` mientras corre un
+  lote agy.**
   - Sin `--dir`: un directorio temporal VACÍO por job, que se borra al terminar.
   - Con `--dir`: ese directorio. Úsalo para la pre-revisión por referencia o una extracción de
     archivos locales.

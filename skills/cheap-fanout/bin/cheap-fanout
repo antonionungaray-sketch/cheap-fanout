@@ -139,7 +139,7 @@ LOCK_STATUS=75
 CAP_STATUS=76
 DENIED_STATUS=65
 # atestación de que la telemetría de Antigravity está apagada (ver el pre-vuelo de la puerta agy)
-AGY_ATTEST_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/cheap-fanout/agy-telemetry-off"
+AGY_ATTEST_FILE="${XDG_CONFIG_HOME:-${HOME:-}/.config}/cheap-fanout/agy-telemetry-off"
 RETRIES="${CHEAP_FANOUT_RETRIES:-3}"
 RETRY_BASE="${CHEAP_FANOUT_RETRY_BASE:-2}"
 CAP_RETRIES="${CHEAP_FANOUT_CAP_RETRIES:-2}"
@@ -258,7 +258,7 @@ resolve_mpath() {
 }
 
 # --- qué CLIs necesita este jobs.tsv (solo exige los que se usan) + valida los plazos ---
-need_opencode=0; need_codex=0; need_agy=0; AGY_IDS=""; lineno=0; vetados_vistos=""
+need_opencode=0; need_codex=0; need_agy=0; AGY_IDS=(); lineno=0; vetados_vistos=""
 while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
   lineno=$((lineno + 1))
   model="${model%%$'\r'}"
@@ -268,7 +268,9 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
     codex|codex:*) need_codex=1;;
     agy)          echo "cheap-fanout: línea $lineno: 'agy' necesita un id: agy:<id> (lista: agy models)" >&2
                   exit 2;;
-    agy:*)        need_agy=1; AGY_IDS="${AGY_IDS}${AGY_IDS:+ }${model#agy:}";;
+    agy:)         echo "cheap-fanout: línea $lineno: 'agy:' sin id: agy:<id> (lista: agy models)" >&2
+                  exit 2;;
+    agy:*)        need_agy=1; AGY_IDS+=("${model#agy:}");;
     *)            need_opencode=1;;
   esac
   if [ "$ALLOW_VETOED" != 1 ] && is_vetoed "$model"; then
@@ -310,6 +312,13 @@ command -v timeout >/dev/null 2>&1 || { HAVE_TIMEOUT=0
 # variable de entorno que lo salte.
 if [ "$need_agy" = 1 ]; then
   command -v agy >/dev/null 2>&1 || { echo "cheap-fanout: agy no está en PATH" >&2; exit 2; }
+  if [ "${CHEAP_FANOUT_AGY_WRITE:-0}" = 1 ] && [ -z "$REPO" ]; then
+    echo "cheap-fanout: CHEAP_FANOUT_AGY_WRITE=1 requiere --dir (un worktree aislado): sin él, lo que el job escriba se perdería en su workspace temporal." >&2
+    exit 2
+  fi
+  if [ -z "${XDG_CONFIG_HOME:-}" ] && [ -z "${HOME:-}" ]; then
+    echo "cheap-fanout: sin HOME ni XDG_CONFIG_HOME no puedo buscar la atestación de telemetría de agy" >&2; exit 2
+  fi
   if [ ! -e "$AGY_ATTEST_FILE" ]; then
     { echo "cheap-fanout: FALTA LA ATESTACIÓN DE TELEMETRÍA — no se lanzó ningún job del lote."
       echo "cheap-fanout: los términos de Antigravity usan tus interacciones para mejorar los modelos de Google"
@@ -318,11 +327,14 @@ if [ "$need_agy" = 1 ]; then
     } >&2
     exit 2
   fi
-  if [ "$HAVE_TIMEOUT" = 1 ]; then timeout 60 agy models > "$AGY_MODELS_CACHE" 2>/dev/null < /dev/null
-  else agy models > "$AGY_MODELS_CACHE" 2>/dev/null < /dev/null; fi
+  # las llamadas auxiliares a agy corren en un directorio VACÍO, nunca en el cwd del helper
+  agy_aux_dir="$(mktemp -d "${TMPDIR:-/tmp}/cheap-fanout-agy-aux.XXXXXX")" || { echo "cheap-fanout: no pude crear un temporal" >&2; exit 2; }
+  if [ "$HAVE_TIMEOUT" = 1 ]; then ( CDPATH= cd -- "$agy_aux_dir" && timeout 60 agy models ) > "$AGY_MODELS_CACHE" 2>/dev/null < /dev/null
+  else ( CDPATH= cd -- "$agy_aux_dir" && agy models ) > "$AGY_MODELS_CACHE" 2>/dev/null < /dev/null; fi
+  rmdir "$agy_aux_dir" 2>/dev/null || rm -rf "$agy_aux_dir"
   agy_validos="$(awk -F'\t' 'NF >= 2 && $1 != "" { print $1 }' "$AGY_MODELS_CACHE" 2>/dev/null)"
   agy_raros=""
-  for id in $AGY_IDS; do
+  for id in "${AGY_IDS[@]}"; do
     printf '%s\n' "$agy_validos" | grep -qxF -- "$id" && continue
     case " $agy_raros " in *" $id "*) ;; *) agy_raros="${agy_raros}${agy_raros:+ }$id";; esac
   done
@@ -549,7 +561,7 @@ agy_print_timeout() {
 }
 
 # Lee el ÚLTIMO evento `result` del NDJSON de agy, escribe su `response` en <out_file> e imprime
-# `status<TAB>finished_reason<TAB>error`. Exit 0 si hubo result; 1 si no (incluye log vacío o
+# `status␟finished_reason␟error` (separador \x1f: un TAB colapsaría los campos vacíos). Exit 0 si hubo result; 1 si no (incluye log vacío o
 # inexistente: agy murió antes de responder); 2 si hay JSON pero ninguna línea con `event`
 # (formato no reconocido: agy se autoactualiza y podría cambiarlo).
 agy_parse_result() {
@@ -582,24 +594,49 @@ with fh:
 if res is None:
     sys.exit(2 if (saw_json and not saw_event) else 1)
 resp = res.get("response")
+if resp is None:
+    resp = ""
 if not isinstance(resp, str):
-    resp = "" if resp is None else json.dumps(resp, ensure_ascii=False)
+    sys.exit(2)        # agy cambió el tipo de `response`: no lo cuentes como respuesta
 with open(out, "w", encoding="utf-8") as f:
     f.write(resp)
 def clean(v):
     return str(v if v is not None else "").replace("\t", " ").replace("\r", " ").replace("\n", " ")
-print("\t".join([clean(res.get("status")), clean(res.get("finished_reason")), clean(res.get("error"))]))
+print("\x1f".join([clean(res.get("status")), clean(res.get("finished_reason")), clean(res.get("error"))]))
 PY
 }
 
-# Permisos que agy negó en headless (soft-deny), únicos y uno por línea; "desconocido" si el aviso
-# está pero no nombra el permiso; nada si no hubo soft-deny.
-agy_denied_perms() {
-  [ -s "$1" ] || return 0
-  grep -q 'auto-denied' "$1" 2>/dev/null || return 0
-  local p
-  p="$(grep -oE 'required the "[a-z_]+" permission' "$1" 2>/dev/null | sed -E 's/.*"([a-z_]+)".*/\1/' | sort -u)"
-  if [ -n "$p" ]; then printf '%s\n' "$p"; else echo desconocido; fi
+# Permisos que agy negó, únicos y uno por línea; nada si no hubo negación. Dos formas, ambas con
+# exit 0 de agy:
+#   - soft-deny (stderr): "…required the "command" permission that headless mode cannot prompt for,
+#     so it was auto-denied" → el permiso nombrado ("desconocido" si no se puede extraer);
+#   - Deny DURO de una regla (traza, medido 2026-11-26): un step_update de herramienta en estado ERROR
+#     con "permission check failed for write_file …" → el nombre de la herramienta.
+agy_denied_perms() { # <err_file> [<ndjson>]
+  local p=""
+  if [ -s "$1" ] && grep -q 'auto-denied' "$1" 2>/dev/null; then
+    p="$(grep -oE 'required the "[a-z_]+" permission' "$1" 2>/dev/null | sed -E 's/.*"([a-z_]+)".*/\1/')"
+    [ -n "$p" ] || p=desconocido
+  fi
+  if [ -n "${2:-}" ] && [ -s "$2" ]; then
+    p="$p"$'\n'"$(python3 -I -c 'import json, re, sys
+for l in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    l = l.strip()
+    if not l.startswith("{"):
+        continue
+    try:
+        e = json.loads(l)
+    except ValueError:
+        continue
+    su = e.get("step_update") if isinstance(e, dict) else None
+    if not isinstance(su, dict) or su.get("step_type") != "tool" or su.get("state") != "ERROR":
+        continue
+    err = ((su.get("tool_info") or {}).get("error") or {})
+    msg = err.get("message", "") if isinstance(err, dict) else str(err)
+    if re.search(r"permission check failed|permission denied", msg, re.I):
+        print(su.get("tool_name") or "desconocido")' "$2" 2>/dev/null)"
+  fi
+  printf '%s\n' "$p" | sed '/^$/d' | sort -u
 }
 
 # Campo del ÚLTIMO `AGY_ERROR: {json}` de stderr. agy lo imprime al fallar; forma verificada con el
@@ -698,16 +735,16 @@ run_agy() {
     fi
     rc=0
     # las redirecciones van FUERA del subshell: se resuelven contra el cwd del helper, no contra ws
-    ( cd "$ws" && exec "${tmo[@]}" agy -p "$prompt" --model "$id" --output-format stream-json \
+    ( CDPATH= cd -- "$ws" && exec "${tmo[@]}" agy -p "$prompt" --model "$id" --output-format stream-json \
         "${ptarg[@]}" --settings "$(agy_settings_json)" ) < /dev/null > "${of}.log" 2> "${of}.err" || rc=$?
     [ "$own_ws" = 1 ] && rm -rf "$ws"
 
     : > "$of"
     prc=0; rst=""; rfr=""; rer=""
     info="$(agy_parse_result "${of}.log" "$of")" || prc=$?
-    [ "$prc" = 0 ] && IFS=$'\t' read -r rst rfr rer <<< "$info"
+    [ "$prc" = 0 ] && IFS=$'\x1f' read -r rst rfr rer <<< "$info"
     body="$(tr -d '[:space:]' < "$of" | head -c 1)"
-    denied="$(agy_denied_perms "${of}.err")"
+    denied="$(agy_denied_perms "${of}.err" "${of}.log")"
     timed=0
     case "$rc" in 3|124|137) timed=1;; esac
     [ "$rfr" = print_timeout ] && timed=1
@@ -738,7 +775,7 @@ run_agy() {
 
   # una nota por cada condición detectada
   if [ -n "$denied" ]; then
-    printf '\n[cheap-fanout] DENEGADO: agy negó en headless el permiso %s (soft-deny: la corrida siguió).\n' \
+    printf '\n[cheap-fanout] DENEGADO: agy negó el permiso %s (soft-deny o regla deny; la corrida siguió con exit 0).\n' \
       "$(printf '%s' "$denied" | paste -sd, - | sed 's/,/, /g')" >> "$of"
     printf 'La respuesta de arriba puede estar incompleta; revisa %s.err y %s.denied.\n' "$of" "$of" >> "$of"
   fi
@@ -1005,8 +1042,8 @@ while IFS=$'\t' read -r model pf of to || [ -n "${model:-}" ]; do
     *) fail=$((fail + 1)); echo "cheap-fanout: FALLÓ (status=$s) → $of" >&2;;
   esac
   # sesión de agy vencida: falla con su propio código (nunca 77) y se dice cómo arreglarlo
-  if [ "$s" != 0 ] && [ -s "${of}.err" ] && grep -q '^agy:' "${of}.gate" 2>/dev/null \
-     && grep -qi 'authentication required' "${of}.err" 2>/dev/null; then
+  if [ "$s" != 0 ] && grep -q '^agy:' "${of}.gate" 2>/dev/null \
+     && grep -qF '[cheap-fanout] SIN SESIÓN' "$of" 2>/dev/null; then
     echo "cheap-fanout: SIN SESIÓN DE AGY → $of: corre \`agy\` una vez en modo interactivo para iniciar sesión." >&2
   fi
 done < "$JOBS"

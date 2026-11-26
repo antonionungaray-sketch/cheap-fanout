@@ -8,7 +8,7 @@ set -uo pipefail
 
 TEST="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$TEST/../../.." && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/install-agy-test.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/install-agy-test.XXXXXX")" || { echo "FAIL: no pude crear el temporal"; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 fail=0
 ok()  { printf '   ✔ %s\n' "$1"; }
@@ -32,6 +32,15 @@ else bad "sin atestación → no aparece el aviso"; fi
 check "$WORK/cfg"
 if grep -qF '✅ google (agy)     atestación de telemetría presente' "$WORK/out"; then ok "con atestación → ✅"
 else bad "con atestación → no aparece la línea ✅"; fi
+
+echo "== frontmatter YAML de los skills =="
+for sk in "$REPO"/skills/*/SKILL.md; do
+  if python3 -I -c 'import sys, yaml
+t = open(sys.argv[1], encoding="utf-8").read().split("---")
+d = yaml.safe_load(t[1])
+assert isinstance(d, dict) and d.get("name") and d.get("description")' "$sk" 2> /dev/null; then ok "$(basename "$(dirname "$sk")"): frontmatter YAML válido"
+  else bad "$(basename "$(dirname "$sk")"): frontmatter YAML inválido"; fi
+done
 
 echo
 if [ "$fail" = 0 ]; then echo "PASS: install.sh y la puerta agy"; exit 0; fi

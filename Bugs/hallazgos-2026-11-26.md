@@ -40,6 +40,8 @@ caducan.
 | b2) Solo lectura: `touch ~/<x>` | **Falla**: "Sistema de archivos de solo lectura". Fuera del workspace y de los temporales, el sandbox contiene |
 | c) `CHEAP_FANOUT_AGY_WRITE=1` con `--dir` a un repo temporal | Crea el archivo; status 0 |
 
+| d) Lectura de señuelos (tras la revisión final): `cat /tmp/<x>` y `cat ~/<x>` | **Lee `/tmp`**; `$HOME` no existe para el agente ("No existe el archivo o el directorio") |
+
 **Consecuencia:** el modo de solo lectura cumple lo que promete la spec (5.1): mejor esfuerzo, con el
 sandbox confinando al workspace y a los temporales. Un job de agy **sí puede escribir en `/tmp`**, y
 eso hay que decirlo en el skill.

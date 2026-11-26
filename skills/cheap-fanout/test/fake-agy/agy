@@ -89,6 +89,12 @@ print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response":
                   fi
                   init; result SUCCESS "RESPUESTA-OK";;
   auth)           echo "error: authentication required" >&2; exit 1;;
+  auth-result)    result ERROR "" "" "authentication required"; exit 1;;
+  resp-objeto)    echo '{"event":"result","result":{"status":"SUCCESS","response":{}}}';;
+  deny-duro)      # el Deny DURO de una regla (medido 2026-11-26): la herramienta falla en la traza, exit 0
+                  init
+                  echo '{"event":"step_update","step_update":{"step_index":2,"state":"ERROR","step_type":"tool","tool_name":"write_file","tool_info":{"name":"write_file","parameters":{"Path":"nota.txt"},"error":{"type":"TOOL_ERROR","message":"permission check failed for write_file \"nota.txt\": Permission denied for write_file(nota.txt)"}}}}'
+                  result SUCCESS "No pude crear el archivo nota.txt: permiso denegado.";;
   *)              echo "fake-agy: escenario desconocido: '$esc'" >&2; exit 99;;
 esac
 exit 0
