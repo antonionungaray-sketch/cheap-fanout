@@ -27,7 +27,8 @@
 #   agy-budget --quiet         # sin salida; solo el exit code
 #
 # Bolsas por modelo (--model):
-#   gemini-4-argon-* y gemini-pro-orchestrator-g1-pro → "Gemini Models" + "Gemini 4 Argon"
+#   gemini-4-argon-* y su Orchestrator (gemini-pro-orchestrator-argon; antes de agy 1.5.18,
+#     gemini-pro-orchestrator-g1-pro)              → "Gemini Models" + "Gemini 4 Argon"
 #   cualquier otro gemini-*                         → "Gemini Models"
 #   claude-* y gpt-oss-*                            → "Claude and GPT models"
 #   otro id                                         → exit 3 (bolsa desconocida)
@@ -53,7 +54,8 @@ say() { [ "$QUIET" = 1 ] || echo "$@" >&2; }
 
 pools_for() { # imprime las bolsas de un modelo, una por línea; exit 1 si no tiene bolsa conocida
   case "$1" in
-    gemini-4-argon-*|gemini-pro-orchestrator-g1-pro) printf 'Gemini Models\nGemini 4 Argon\n';;
+    gemini-4-argon-*|gemini-pro-orchestrator-argon|gemini-pro-orchestrator-g1-pro)
+                                                     printf 'Gemini Models\nGemini 4 Argon\n';;
     gemini-*)                                        printf 'Gemini Models\n';;
     claude-*|gpt-oss-*)                              printf 'Claude and GPT models\n';;
     *) return 1;;
@@ -82,7 +84,11 @@ while IFS=$'\t' read -r pool label pct reset extra; do
     *Weekly*)      win=semana;;
     *)             win=otra;;
   esac
-  local_t="$(date -d "$reset" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || printf '%s' "$reset")"
+  # una ventana que todavía no arranca (sin uso desde el último reset) llega con la época 0
+  case "$reset" in
+    1970-01-01T00:00:00*) local_t="sin iniciar";;
+    *) local_t="$(date -d "$reset" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || printf '%s' "$reset")";;
+  esac
   rows="${rows}${pool}"$'\t'"${win}"$'\t'"${pct%\%}"$'\t'"${reset}"$'\t'"${local_t}"$'\n'
 done <<< "$raw"
 

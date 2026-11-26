@@ -56,6 +56,9 @@ mk_usage 90 99 94 97 0;  expect_rc "gemini-4-hydrogen-low con Argon en 0%" 0 --m
 mk_usage 98 99 94 97 99; expect_rc "gpt-oss-120b-medium cae en Claude and GPT" 0 --model gpt-oss-120b-medium
 mk_usage 98 99 94 97 99; expect_rc "id sin bolsa conocida" 3 --model modelo-raro
 
+mk_usage 90 99 94 97 0;  expect_rc "gemini-pro-orchestrator-argon (id de agy ≥1.5.18) con Argon en 0%" 2 --model gemini-pro-orchestrator-argon
+mk_usage 98 99 94 97 99; expect_rc "gemini-4-carbon-high cae en Gemini Models" 0 --model gemini-4-carbon-high
+
 echo "== 3. --tsv =="
 mk_usage 98 99 94 97 99
 run --tsv > /dev/null
@@ -69,6 +72,11 @@ else bad "fila Gemini semanal mal formada"; fi
 run --tsv --model claude-opus-5-5-high > /dev/null
 if [ "$(wc -l < "$WORK/out")" = 2 ] && ! grep -q '^Gemini' "$WORK/out"; then ok "--tsv --model solo imprime sus bolsas"
 else bad "--tsv --model imprimió otras bolsas: $(cat "$WORK/out")"; fi
+
+printf 'Claude and GPT models\tFive Hour Limit Remaining\t100%%\t1970-01-01T00:00:00Z\n' > "$WORK/usage.tsv"
+run --tsv > /dev/null
+if grep -qP '\tsin iniciar$' "$WORK/out"; then ok "reset en época 0 (ventana sin usar) → 'sin iniciar'"
+else bad "reset en época 0 → '$(cut -f5 "$WORK/out")'"; fi
 
 echo "== 4. no se pudo leer =="
 mk_usage 98 99 94 97 99
