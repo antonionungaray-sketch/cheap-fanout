@@ -118,8 +118,9 @@ B=~/.claude/skills/cheap-fanout/bin/cheap-fanout
 "$B" --dir /ruta/al/repo --parallel 6 jobs.tsv    # si leen/escriben un repo
 "$B" --timeout 3m jobs.tsv                        # cambia el plazo default del lote
 ~/.claude/skills/cheap-fanout/bin/go-budget   # gasto por modelo en sus tres ventanas (5h/7d/30d)
+~/.claude/skills/cheap-fanout/bin/agy-budget  # cuota de Google (agy) por bolsa y ventana
 ```
-- El `<model>` admite tres formas (verificadas 2026-11-20):
+- El `<model>` admite cuatro formas (verificadas 2026-11-20; `agy:` el 2026-11-26):
   - `deepseek-v4.1-flash` — sin prefijo ⇒ el helper le pone `opencode-go/` (plan Go).
   - `opencode/deepseek-v4.1-flash-free` — cualquier ruta `<provider>/<id>` de opencode pasa **tal
     cual** (aquí, un gemelo gratuito de Zen; ver *Modelos gratuitos*). Las rutas de Kimi directo
@@ -127,6 +128,10 @@ B=~/.claude/skills/cheap-fanout/bin/cheap-fanout
     rutees; K3 va por Go (`kimi-k3`). El helper aún traduce `kimi-for-coding/*` por si se reactiva.
   - `codex` o `codex:<model>` — corre por `codex exec` con la suscripción ChatGPT. En jobs codex,
     `out_file` trae SOLO el mensaje final; la traza completa queda en `out_file.log`.
+  - `agy:<id>` — corre por `agy -p` (Google Antigravity, cuota de Google AI Pro): workspace
+    temporal aislado salvo `--dir`, solo lectura y sin AI credits forzados, `.status=65` si agy
+    soft-deniega una acción. Requiere la atestación de telemetría apagada. **Reglas, ruteo y cuota:
+    skill `google-fanout`** (nunca material del cliente por esta puerta).
 - Concurrencia: en **Linux** el default 6 es razonable (medido 2026-08-09 hasta `--parallel 4`
   con lote mixto, 0 fallos). Los jobs codex no tocan el SQLite de opencode (corren
   `--ephemeral`): un lote mixto reparte mejor la concurrencia.
@@ -502,13 +507,14 @@ GO_PERIOD_DAY=9 ~/.claude/skills/cheap-fanout/bin/go-budget     # si sabes qué 
 3. **Si no hay gemelo seguro o el gemelo también falla, el helper NO sustituye el modelo.** Deja el
    job en `.status=77` ("SIN CUOTA") y te lo reporta, para que decidas tú.
 
-**Los tres presupuestos activos, independientes entre sí** (el cuarto, Kimi directo, está pausado):
+**Los cuatro presupuestos activos, independientes entre sí** (el quinto, Kimi directo, está pausado):
 
 | Puerta | En `jobs.tsv` | Presupuesto | Para qué |
 |---|---|---|---|
 | Go | `deepseek-v4.1-flash` | **una bolsa** para todos los modelos de pago; cada dólar pesa 1/límite (ventanas 20%/50%/100%) | el ancho, por default |
 | Free | `hy4-flash-free`, `opencode/deepseek-v4.1-flash-free`, `beam-free` | gratis, "limited time", con tope diario | el ancho sin tocar la bolsa (a mano; por su cuenta el helper rescata únicamente a `deepseek-v4.1-flash`, en su gemelo) |
 | ChatGPT | `codex:gpt-6.2-sol` / `codex:<m>` | ventana 5h + semanal de ChatGPT | casi-frontier, pre-revisión de alto impacto, código, mecánico; **no** investigación web |
+| Google | `agy:gemini-4-hydrogen-low` / `agy:<id>` | dos bolsas (Gemini; Claude y GPT) con ventanas de 5h y semanal; `agy-budget` | investigación sin URL (`search_web`), ancho cuando Go aprieta, casi-frontier Neon/Carbon; **solo material público o no sensible** — ver skill **google-fanout** |
 | ~~Allegretto~~ | ~~`kimi-code-plan-cn/k3`~~ | **pausada por Antonio (2026-11-05)** | no rutear; K3 va por Go |
 
 > **Ojo con "Extra Usage"** (antes "Use balance"): en la página de Go de la consola hay una opción
@@ -680,6 +686,6 @@ GO_PERIOD_DAY=9 ~/.claude/skills/cheap-fanout/bin/go-budget     # si sabes qué 
 
 La tabla **síntoma → arreglo** (SQLite, timeouts, cuota, vetos, bots, codex, Kimi, precios
 corruptos por `$N`) está en `reference/troubleshooting.md`: ábrela cuando un job falle. Los
-`.status` del helper: `0` OK · `124`/`137` timeout · `77` sin cuota · `66` salida vacía · `64` prompt
+`.status` del helper: `0` OK · `124`/`137` timeout · `77` sin cuota · `66` salida vacía · `65` soft-deny de agy · `64` prompt
 > argv · `75` SQLite bloqueado tras reintentos · `76` proveedor saturado tras reintentos; exit `2` del helper sin correr nada = modelo vetado
 o `jobs.tsv` inválido.

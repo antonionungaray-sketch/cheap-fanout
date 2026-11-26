@@ -4,6 +4,67 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). L
 `.claude-plugin/plugin.json`. Para la evidencia detrás de cada cambio, ver los documentos de
 hallazgos en [`Bugs/`](Bugs/).
 
+## [1.7.0] — 2026-11-26
+
+> **Estado del release:** en la rama `feat/google-fanout`, sin publicar. Lo pidió Antonio; lo diseñó,
+> implementó y probó Claude Opus 5.5. Spec: `docs/superpowers/specs/2026-11-21-google-fanout-design.md`.
+> Mediciones: [`Bugs/hallazgos-2026-11-26.md`](Bugs/hallazgos-2026-11-26.md).
+
+### Agregado
+
+- **La puerta `agy:<id>`** (Google Antigravity CLI, cuota de Google AI Pro/Ultra) en `bin/cheap-fanout`:
+  - corre `agy -p` en headless con `stream-json`;
+  - deja la respuesta en `out_file`, la traza en `.log` y stderr en `.err`;
+  - tiene pre-vuelo propio: `agy` en el PATH, la atestación de telemetría apagada y los ids validados
+    contra `agy models`.
+- **`bin/agy-budget`**, el gemelo de `go-budget` para las bolsas de Google: lee `agy -p /usage` y
+  tiene `--model`, `--tsv` y `--quiet`; exit 0, 1, 2 o 3.
+- **El skill `google-fanout`**: reglas duras, ruteo medido, cuota y mecánica, con su
+  `reference/agy.md`. Se probó con RED/GREEN: 9 de 15 sin el skill, 25 de 25 con él y 2 de 2 bajo
+  presión.
+- **Bancos reutilizables:**
+  - `test/bench-extraccion`: fixture determinista de 31 filas, calificación estricta y tolerante;
+  - `test/bench-prerevision`: 8 unidades con 6 fallas sembradas.
+- **Pruebas sin costo:** `test/agy-puerta.sh`, `test/agy-budget.sh` y `test/install-agy.sh`, con un
+  agy falso (`test/fake-agy/agy`).
+
+### ⚠ Cambio de comportamiento
+
+1. **Lo que se fuerza en cada job agy**, sin importar el `settings.json` del usuario:
+   - `useG1Credits:false`: nunca paga AI credits;
+   - `allowNonWorkspaceAccess:false`;
+   - `agentMode:auto`;
+   - en modo de solo lectura (el default), una regla deny `write_file(*)`.
+   `CHEAP_FANOUT_AGY_WRITE=1` la quita, para jobs que editan con `--dir` a un worktree aislado.
+2. **El workspace de un job agy es un directorio temporal VACÍO que se borra al terminar**, salvo que
+   pases `--dir`. Un job de agy nunca ve el cwd del helper.
+3. **Estado nuevo `.status=65` (soft-deny de agy).** agy sale con 0 y `status: SUCCESS`, a veces sin
+   respuesta, cuando niega en headless una acción que pedía aprobación. Ahora es fallo, con `.denied`.
+4. **La cuota de Google** se confirma con `/usage` antes de dar 77 (con `.quota`). Sin confirmación,
+   el fallo se trata como transitorio: se reintenta y deja 76 si persiste. No hay rescate entre
+   modelos ni puertas. Los jobs que escriben nunca se reintentan solos.
+5. **`bare_id()` también quita `agy:`**: los vetos aplican por esta puerta.
+6. **`install.sh --check`** lista `agy` y dice si falta la atestación.
+
+### Verificación
+
+- **Pruebas locales, todas en verde:**
+  - las 3 que ya existían: `detectores-y-vetos`, `dos-lotes` y `sqlite-race`;
+  - las nuevas: `agy-puerta` (pre-vuelo, ejecución, cuota, transitorios, sesión y resumen),
+    `agy-budget` e `install-agy`;
+  - las autopruebas de los dos bancos.
+- **En vivo, 2026-11-26, agy 1.5.18:**
+  - smoke mixto 4/4;
+  - 12 jobs simultáneos, 12/12 con 31/31;
+  - extracción con todas las puertas;
+  - pre-revisión sembrada: 8/8 en los cinco candidatos;
+  - deny de `write_file` efectivo; el sandbox deja escribir solo en el workspace y en `/tmp`.
+- **Sin verificar:** la firma real de cuota agotada de agy (no se pudo provocar; por eso se confirma
+  con `/usage`) y Orchestrator en headless.
+- **Defecto encontrado en vivo y corregido con test:** agy 1.5.18 renombró el Orchestrator de Argon
+  (`…-g1-pro` → `gemini-pro-orchestrator-argon`) y reporta las ventanas sin uso con reset en la época
+  0.
+
 ## [1.6.1] — 2026-11-20
 
 > **Estado del release:** publicado el 2026-11-20. Cambio pedido por Antonio; implementado y probado

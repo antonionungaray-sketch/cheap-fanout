@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# agy FALSO para las pruebas de cheap-fanout: sin red, sin cuota, sin cuenta de Google.
+#
+# Contrato (plan docs/superpowers/plans/2026-11-21-google-fanout.md, Tasks 1-4):
+#   agy models          → "Fetching available models..." + el contenido de $FAKE_AGY_MODELS
+#   agy -p /usage       → el contenido de $FAKE_AGY_USAGE, con exit ${FAKE_AGY_USAGE_RC:-0}
+#   agy -p /credits     → "Remaining credits<TAB>${FAKE_AGY_CREDITS:-0}"
+#   agy -p /config      → "useG1Credits<TAB>${FAKE_AGY_G1:-false}"
+#   agy -p <prompt> …   → el escenario que pida el token ESCENARIO=<x> del prompt
+# Cada invocación agrega una línea JSON a $FAKE_AGY_LOG (si está definido):
+#   {"cwd": <cwd>, "argv": [<args>], "ls": [<entradas del cwd>]}
+set -u
+
+if [ -n "${FAKE_AGY_LOG:-}" ]; then
+  python3 -I -c 'import json, os, sys
+print(json.dumps({"cwd": os.getcwd(), "argv": sys.argv[1:], "ls": sorted(os.listdir("."))},
+                 ensure_ascii=False))' "$@" >> "$FAKE_AGY_LOG"
+fi
+
+case "${1:-}" in
+  --version) echo "0.0.0-fake"; exit 0;;
+  models)
+    echo "Fetching available models..."
+    [ -n "${FAKE_AGY_MODELS:-}" ] && cat "$FAKE_AGY_MODELS"
+    exit 0;;
+  -p|--print|--prompt) ;;
+  *) echo "fake-agy: invocación no soportada: $*" >&2; exit 98;;
+esac
+
+prompt="${2:-}"
+case "$prompt" in
+  /usage)   [ -n "${FAKE_AGY_USAGE:-}" ] && cat "$FAKE_AGY_USAGE"; exit "${FAKE_AGY_USAGE_RC:-0}";;
+  /credits) printf 'Remaining credits\t%s\n' "${FAKE_AGY_CREDITS:-0}"; exit 0;;
+  /config)  printf 'useG1Credits\t%s\n' "${FAKE_AGY_G1:-false}"; exit 0;;
+esac
+
+# --- escenarios de prompt (Tasks 3 y 4) ---
+shift 2
+model=""
+while [ $# -gt 0 ]; do case "$1" in --model) model="${2:-}"; shift 2;; *) shift;; esac; done
+esc=""
+[[ "$prompt" =~ ESCENARIO=([a-z-]+) ]] && esc="${BASH_REMATCH[1]}"
+
+init() {
+  python3 -I -c 'import json, os, sys
+print(json.dumps({"event": "init", "conversation_id": "fake", "init": {"model": sys.argv[1], "cwd": os.getcwd()}}))' "$model"
+}
+result() { # status response [finished_reason] [error]
+  python3 -I -c 'import json, sys
+st, resp = sys.argv[1], sys.argv[2]
+fr = sys.argv[3] if len(sys.argv) > 3 else ""
+er = sys.argv[4] if len(sys.argv) > 4 else ""
+r = {"conversation_id": "fake", "status": st, "response": resp, "duration_seconds": 0.1, "num_turns": 1,
+     "usage": {"input_tokens": 10, "output_tokens": 2, "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 12}}
+if er: r["error"] = er
+if fr: r["finished_reason"] = fr
+print(json.dumps({"event": "result", "result": r}, ensure_ascii=False))' "$@"
+}
+# el aviso REAL de soft-deny de agy 1.5.14 (medido el 2026-11-21; spec, sección 3.2)
+DENY_CMD='jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.'
+TIMEOUT_MSG='print timeout after 1s with the turn still in progress; the response is partial'
+
+case "$esc" in
+  ok)             init; result SUCCESS "RESPUESTA-OK";;
+  vacio)          result SUCCESS "";;
+  softdeny-vacio) result SUCCESS ""; echo "$DENY_CMD" >&2;;
+  softdeny-resp)  result SUCCESS "hice lo que pude"; echo "${DENY_CMD//\"command\"/\"write_file\"}" >&2;;
+  timeout)        result ERROR "PARCIAL" print_timeout "$TIMEOUT_MSG"
+                  echo "AGY_ERROR: {\"short_error\":\"$TIMEOUT_MSG\",\"status\":\"DEADLINE_EXCEEDED\",\"retryable\":false,\"reason\":\"print_timeout\"}" >&2
+                  exit 3;;
+  cuelga)         init; sleep 30; result SUCCESS "tarde";;
+  sin-result)     init; echo '{"event":"step_update","step_update":{"step_index":0,"state":"DONE","step_type":"user_input"}}';;
+  raro)           echo '{"foo":1}';;
+  eco)            result SUCCESS "$prompt";;
+  grande)         python3 -I -c 'import json
+print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "x" * 2000000}}))';;
+  pwd)            python3 -I -c 'import json, os
+print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": os.getcwd() + "\n" + str(len(os.listdir(".")))}}))';;
+  cuota)          result ERROR "" "" "Quota exhausted for model $model"
+                  echo "AGY_ERROR: {\"short_error\":\"Quota exhausted for model $model\",\"status\":\"RESOURCE_EXHAUSTED\",\"retryable\":false,\"reason\":\"quota_exhausted\"}" >&2
+                  exit 1;;
+  transitorio)    # falla mientras el contador sea menor que FAKE_AGY_FAIL_TIMES; luego se porta como ok
+                  n="$(cat "${FAKE_AGY_COUNTER:-/dev/null}" 2>/dev/null)"; n="${n:-0}"
+                  if [ "$n" -lt "${FAKE_AGY_FAIL_TIMES:-0}" ]; then
+                    [ -n "${FAKE_AGY_COUNTER:-}" ] && echo $((n + 1)) > "$FAKE_AGY_COUNTER"
+                    result ERROR "" "" "backend unavailable"
+                    echo 'AGY_ERROR: {"short_error":"backend unavailable","status":"UNAVAILABLE","retryable":true,"reason":"unavailable"}' >&2
+                    exit 1
+                  fi
+                  init; result SUCCESS "RESPUESTA-OK";;
+  auth)           echo "error: authentication required" >&2; exit 1;;
+  auth-result)    result ERROR "" "" "authentication required"; exit 1;;
+  resp-objeto)    echo '{"event":"result","result":{"status":"SUCCESS","response":{}}}';;
+  deny-duro)      # el Deny DURO de una regla (medido 2026-11-26): la herramienta falla en la traza, exit 0
+                  init
+                  echo '{"event":"step_update","step_update":{"step_index":2,"state":"ERROR","step_type":"tool","tool_name":"write_file","tool_info":{"name":"write_file","parameters":{"Path":"nota.txt"},"error":{"type":"TOOL_ERROR","message":"permission check failed for write_file \"nota.txt\": Permission denied for write_file(nota.txt)"}}}}'
+                  result SUCCESS "No pude crear el archivo nota.txt: permiso denegado.";;
+  *)              echo "fake-agy: escenario desconocido: '$esc'" >&2; exit 99;;
+esac
+exit 0

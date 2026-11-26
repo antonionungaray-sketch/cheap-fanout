@@ -37,6 +37,7 @@ echo "Dependencias:"
 chk opencode opencode "sin él no hay agentes baratos (obligatorio)" 1
 chk codex    codex    "opcional: habilita los jobs 'codex' (presupuesto ChatGPT)" 0
 chk timeout  timeout  "opcional: sin él los jobs corren sin plazo" 0
+chk agy      agy      "opcional: habilita los jobs 'agy:' (cuota de Google AI Pro/Ultra)" 0
 echo
 
 echo "Puertas configuradas:"
@@ -59,6 +60,17 @@ if command -v opencode >/dev/null 2>&1; then
   fi
   if printf '%s\n' "$models" | grep -q -- "-free$"; then
     printf "  ✅ %-16s disponibles (OJO: varios entrenan con tus prompts; ver SKILL.md §Modelos gratuitos)\n" "modelos free"
+  fi
+fi
+if command -v agy >/dev/null 2>&1; then
+  # misma ruta que AGY_ATTEST_FILE en skills/cheap-fanout/bin/cheap-fanout: sin ella el helper
+  # rechaza todo lote con jobs agy (los términos de Antigravity usan tus interacciones para mejorar
+  # los modelos de Google salvo que apagues "Enable Telemetry" en agy → /config)
+  attest="${XDG_CONFIG_HOME:-$HOME/.config}/cheap-fanout/agy-telemetry-off"
+  if [ -e "$attest" ]; then
+    printf "  ✅ %-16s atestación de telemetría presente\n" "google (agy)"
+  else
+    printf "  ⚠️  %-16s falta la atestación de telemetría (ver skill google-fanout)\n" "google (agy)"
   fi
 fi
 echo

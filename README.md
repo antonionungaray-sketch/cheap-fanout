@@ -26,6 +26,10 @@ skills/
     PORTABLE-SPEC.md    spec autocontenida para llevarlo a otra máquina (helper embebido)
     bin/cheap-fanout    el dispatcher: lee un jobs.tsv y corre N agentes en paralelo
     bin/go-budget       medidor de consumo del plan OpenCode Go
+    bin/agy-budget      medidor de la cuota de Google Antigravity (agy)
+  google-fanout/
+    SKILL.md            la puerta agy (Google Antigravity): reglas, ruteo, cuota, privacidad
+    reference/agy.md    el CLI agy en headless: envelope, estados, firmas, fuentes
   cheap-fanout-ultimate/
     SKILL.md                   el consejo: asientos, arbitraje, kill criteria
     council-log.template.md    plantilla; la bitácora real vive en ~/.claude/cheap-fanout/
@@ -64,6 +68,7 @@ quieres editar los skills en su repo y verlos en vivo, sin pasar por el ciclo de
 | [OpenCode CLI](https://opencode.ai) ≥ 1.18 + plan **Go** | los agentes baratos | sí |
 | `bash` + `timeout` (coreutils) | el dispatcher y sus plazos | sí |
 | [Codex CLI](https://github.com/openai/codex) + login ChatGPT | jobs `codex`: un segundo presupuesto | no |
+| [Antigravity CLI](https://antigravity.google/docs/cli/reference) (`agy`) + Google AI Pro/Ultra | jobs `agy:<id>`: un tercer presupuesto, con búsqueda web. Requiere apagar *Enable Telemetry* en `agy` → `/config` y dejar constancia en `~/.config/cheap-fanout/agy-telemetry-off` | no |
 | Suscripción **Kimi For Coding** | **pausada en la máquina del autor desde 2026-11-05**: ya no se usa; K3 va por Go (`kimi-k3`) | no |
 
 Las credenciales de opencode viven en `~/.local/share/opencode/auth.json`, una entrada por
@@ -177,4 +182,5 @@ antes entre el 2026-08-28 y el 2026-10-01—: la fuente de verdad es `opencode.a
 mismos modelos a otro precio porque es pago-por-uso.
 
 Qué cambió y con qué evidencia: [`CHANGELOG.md`](CHANGELOG.md) y
-[`Bugs/hallazgos-2026-10-01.md`](Bugs/hallazgos-2026-10-01.md).
+[`Bugs/hallazgos-2026-10-01.md`](Bugs/hallazgos-2026-10-01.md). La puerta agy (1.7.0) se midió con agy 1.5.18:
+[`Bugs/hallazgos-2026-11-26.md`](Bugs/hallazgos-2026-11-26.md).
